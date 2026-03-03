@@ -1,0 +1,32 @@
+fastapi
+uvicorn[standard]
+gunicorn
+pydantic
+pydantic-settings
+python-dotenv
+black
+mypy
+pytest
+httpx
+boto3
+qdrant-client
+slowapi
+brotli-asgi
+sse-starlette
+
+# Database
+sqlalchemy
+alembic
+asyncpg
+psycopg2-binary
+
+# Authentication
+python-jose[cryptography]
+python-multipart
+requests
+
+# Circuit Breaker
+pybreaker
+
+# Observability
+python-json-logger

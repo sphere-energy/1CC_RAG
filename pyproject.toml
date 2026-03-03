@@ -1,0 +1,14 @@
+[tool.black]
+line-length = 88
+target-version = ["py312"]
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+check_untyped_defs = false
+no_implicit_optional = false
+allow_untyped_globals = true
+disable_error_code = ["call-arg", "assignment", "misc", "attr-defined", "arg-type", "return-value", "var-annotated", "import-untyped"]

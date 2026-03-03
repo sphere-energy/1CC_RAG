@@ -1,0 +1,60 @@
+version: '3.8'
+
+services:
+  # FastAPI Application
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      # Gunicorn
+      - PORT=8000
+      - GUNICORN_WORKERS=4
+
+      # Qdrant Configuration
+      - QDRANT_HOST=${QDRANT_HOST:-qdrant}
+      - QDRANT_PORT=${QDRANT_PORT:-6333}
+      - QDRANT_COLLECTION_NAME=${QDRANT_COLLECTION_NAME:-1cc_legislation}
+
+      # AWS Configuration
+      - AWS_REGION=${AWS_REGION:-eu-central-1}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - BEDROCK_EMBEDDING_MODEL_ID=${BEDROCK_EMBEDDING_MODEL_ID}
+      - BEDROCK_TEXT_MODEL_ID=${BEDROCK_TEXT_MODEL_ID}
+
+      # AWS Cognito
+      - COGNITO_REGION=${COGNITO_REGION:-eu-central-1}
+      - COGNITO_USER_POOL_ID=${COGNITO_USER_POOL_ID}
+      - COGNITO_CLIENT_ID=${COGNITO_CLIENT_ID}
+
+      # Database (AWS RDS)
+      - DATABASE_URL=${DATABASE_URL}
+      - DATABASE_POOL_SIZE=${DATABASE_POOL_SIZE:-10}
+      - DATABASE_MAX_OVERFLOW=${DATABASE_MAX_OVERFLOW:-20}
+
+      # Application
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000,http://localhost:8000}
+      - RATE_LIMIT=${RATE_LIMIT:-5/minute}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    depends_on:
+      - qdrant
+    networks:
+      - rag-network
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/health', timeout=5)" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+networks:
+  rag-network:
+    driver: bridge
+
+volumes:
+  qdrant_data:
+    driver: local
