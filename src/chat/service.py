@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+from datetime import datetime
 from collections.abc import Iterator
 from typing import Any
 from uuid import UUID
@@ -510,6 +511,8 @@ class ChatService:
         if not conversation.title and len(messages) == 1:
             conversation.title = user_query[:100]  # First 100 chars
 
+        # Always update timestamp so conversations sort by last activity
+        conversation.updated_at = datetime.utcnow()
         self.db.commit()
         self.db.refresh(assistant_message_obj)
 
@@ -660,6 +663,8 @@ class ChatService:
             if not conversation.title and len(messages) == 1:
                 conversation.title = user_query[:100]
 
+            # Always update timestamp so conversations sort by last activity
+            conversation.updated_at = datetime.utcnow()
             self.db.commit()
             yield {
                 "event": "metadata",
