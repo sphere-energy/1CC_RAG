@@ -219,6 +219,51 @@ class ChatService:
 
         return conv
 
+    def list_conversations(self, limit: int = 50, offset: int = 0) -> tuple[list[dict], int]:
+        """List conversations for the current user, newest first."""
+        from sqlalchemy import func
+
+        base_query = self.db.query(Conversation).filter(
+            Conversation.user_id == self.user.id
+        )
+        total = base_query.count()
+
+        conversations = (
+            base_query
+            .order_by(Conversation.updated_at.desc())
+            .offset(offset)
+            .limit(limit)
+            .all()
+        )
+
+        items = []
+        for conv in conversations:
+            msg_count = (
+                self.db.query(func.count(DBMessage.id))
+                .filter(DBMessage.conversation_id == conv.id)
+                .scalar()
+            )
+            items.append({
+                "id": conv.id,
+                "title": conv.title,
+                "created_at": conv.created_at,
+                "updated_at": conv.updated_at,
+                "message_count": msg_count or 0,
+            })
+
+        return items, total
+
+    def get_conversation_detail(self, conversation_id: UUID) -> dict:
+        """Get a single conversation with all its messages."""
+        conv = self._resolve_conversation(conversation_id)
+        return {
+            "id": conv.id,
+            "title": conv.title,
+            "created_at": conv.created_at,
+            "updated_at": conv.updated_at,
+            "messages": conv.messages,  # loaded via relationship, ordered by created_at
+        }
+
     def _extract_profile_memories(self, messages: list[Message]) -> list[str]:
         profile_memories: list[str] = []
         pattern = re.compile(
