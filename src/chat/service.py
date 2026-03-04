@@ -1,3 +1,4 @@
+import json
 import logging
 import re
 from collections.abc import Iterator
@@ -617,7 +618,7 @@ class ChatService:
             self.db.commit()
             yield {
                 "event": "metadata",
-                "data": str(
+                "data": json.dumps(
                     {
                         "intent": intent,
                         "degraded_mode": retrieval_error is not None,
