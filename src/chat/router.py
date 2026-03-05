@@ -219,3 +219,21 @@ async def get_conversation(
         return ConversationDetail(**detail)
     except APIException as e:
         raise HTTPException(status_code=e.status_code, detail=e.message)
+
+
+@router.delete("/conversations/{conversation_id}", status_code=204)
+async def delete_conversation(
+    conversation_id: str,
+    service: ChatService = Depends(get_chat_service),
+):
+    from uuid import UUID
+
+    try:
+        conv_uuid = UUID(conversation_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid conversation ID")
+
+    try:
+        service.delete_conversation(conv_uuid)
+    except APIException as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
