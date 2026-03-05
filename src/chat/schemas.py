@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
@@ -41,3 +42,38 @@ class ProfileMemoryCreate(BaseModel):
 
 class PersonalizationUpdate(BaseModel):
     enabled: bool = Field(...)
+
+
+class MessageResponse(BaseModel):
+    id: UUID
+    role: str
+    content: str
+    metadata: dict[str, Any] | None = Field(None, alias="message_metadata")
+    created_at: datetime
+
+    model_config = {"from_attributes": True, "populate_by_name": True}
+
+
+class ConversationListItem(BaseModel):
+    id: UUID
+    title: str | None
+    created_at: datetime
+    updated_at: datetime
+    message_count: int = 0
+
+    model_config = {"from_attributes": True}
+
+
+class ConversationDetail(BaseModel):
+    id: UUID
+    title: str | None
+    created_at: datetime
+    updated_at: datetime
+    messages: list[MessageResponse]
+
+    model_config = {"from_attributes": True}
+
+
+class ConversationListResponse(BaseModel):
+    items: list[ConversationListItem]
+    total: int

@@ -10,6 +10,8 @@ from src.chat.retriever import QdrantRetriever
 from src.chat.schemas import (
     ChatRequest,
     ChatResponse,
+    ConversationDetail,
+    ConversationListResponse,
     PersonalizationUpdate,
     ProfileMemoryCreate,
 )
@@ -183,5 +185,37 @@ async def set_personalization(
     try:
         service.set_personalization(payload.enabled)
         return {"status": "ok", "enabled": payload.enabled}
+    except APIException as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+
+
+@router.get("/conversations", response_model=ConversationListResponse)
+async def list_conversations(
+    limit: int = 50,
+    offset: int = 0,
+    service: ChatService = Depends(get_chat_service),
+):
+    try:
+        items, total = service.list_conversations(limit=limit, offset=offset)
+        return ConversationListResponse(items=items, total=total)
+    except APIException as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+
+
+@router.get("/conversations/{conversation_id}", response_model=ConversationDetail)
+async def get_conversation(
+    conversation_id: str,
+    service: ChatService = Depends(get_chat_service),
+):
+    from uuid import UUID
+
+    try:
+        conv_uuid = UUID(conversation_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid conversation ID")
+
+    try:
+        detail = service.get_conversation_detail(conv_uuid)
+        return ConversationDetail(**detail)
     except APIException as e:
         raise HTTPException(status_code=e.status_code, detail=e.message)

@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+from datetime import datetime
 from collections.abc import Iterator
 from typing import Any
 from uuid import UUID
@@ -218,6 +219,51 @@ class ChatService:
             )
 
         return conv
+
+    def list_conversations(self, limit: int = 50, offset: int = 0) -> tuple[list[dict], int]:
+        """List conversations for the current user, newest first."""
+        from sqlalchemy import func
+
+        base_query = self.db.query(Conversation).filter(
+            Conversation.user_id == self.user.id
+        )
+        total = base_query.count()
+
+        conversations = (
+            base_query
+            .order_by(Conversation.updated_at.desc())
+            .offset(offset)
+            .limit(limit)
+            .all()
+        )
+
+        items = []
+        for conv in conversations:
+            msg_count = (
+                self.db.query(func.count(DBMessage.id))
+                .filter(DBMessage.conversation_id == conv.id)
+                .scalar()
+            )
+            items.append({
+                "id": conv.id,
+                "title": conv.title,
+                "created_at": conv.created_at,
+                "updated_at": conv.updated_at,
+                "message_count": msg_count or 0,
+            })
+
+        return items, total
+
+    def get_conversation_detail(self, conversation_id: UUID) -> dict:
+        """Get a single conversation with all its messages."""
+        conv = self._resolve_conversation(conversation_id)
+        return {
+            "id": conv.id,
+            "title": conv.title,
+            "created_at": conv.created_at,
+            "updated_at": conv.updated_at,
+            "messages": conv.messages,  # loaded via relationship, ordered by created_at
+        }
 
     def _extract_profile_memories(self, messages: list[Message]) -> list[str]:
         profile_memories: list[str] = []
@@ -465,6 +511,8 @@ class ChatService:
         if not conversation.title and len(messages) == 1:
             conversation.title = user_query[:100]  # First 100 chars
 
+        # Always update timestamp so conversations sort by last activity
+        conversation.updated_at = datetime.utcnow()
         self.db.commit()
         self.db.refresh(assistant_message_obj)
 
@@ -615,6 +663,8 @@ class ChatService:
             if not conversation.title and len(messages) == 1:
                 conversation.title = user_query[:100]
 
+            # Always update timestamp so conversations sort by last activity
+            conversation.updated_at = datetime.utcnow()
             self.db.commit()
             yield {
                 "event": "metadata",
