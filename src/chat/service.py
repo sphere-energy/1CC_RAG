@@ -220,6 +220,29 @@ class ChatService:
 
         return conv
 
+    def delete_conversation(self, conversation_id: UUID) -> None:
+        """Hard-delete a conversation and all its messages (cascade)."""
+        conv = (
+            self.db.query(Conversation)
+            .filter(Conversation.id == conversation_id)
+            .first()
+        )
+        if conv is None:
+            raise APIException(
+                message="Conversation not found",
+                status_code=404,
+                error_type="not_found",
+            )
+        if conv.user_id != self.user.id:
+            raise APIException(
+                message="You are not authorized to delete this conversation",
+                status_code=403,
+                error_type="authorization_error",
+            )
+        self.db.delete(conv)
+        self.db.commit()
+        logger.info("Deleted conversation %s for user %s", conversation_id, self.user.id)
+
     def list_conversations(self, limit: int = 50, offset: int = 0) -> tuple[list[dict], int]:
         """List conversations for the current user, newest first."""
         from sqlalchemy import func
