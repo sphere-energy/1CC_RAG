@@ -116,6 +116,12 @@ def init_cognito_verifier(settings: Settings) -> CognitoTokenVerifier:
     return _verifier
 
 
+def _is_jwt_format(token: str) -> bool:
+    """Check if token looks like a JWT (three base64 segments separated by dots)."""
+    parts = token.split(".")
+    return len(parts) == 3 and all(len(p) > 0 for p in parts)
+
+
 def get_current_user(
     credentials: HTTPAuthorizationCredentials = Security(security),
 ) -> dict:
@@ -143,6 +149,19 @@ def get_current_user(
             }
         raise HTTPException(status_code=401, detail="Missing or invalid token")
 
+    token = credentials.credentials
+
+    # In development mode, accept plain user IDs (non-JWT tokens)
+    # Use consistent dev user ID so all devs see the same conversations
+    if settings.environment == "dev" and not _is_jwt_format(token):
+        logger.info("Dev mode: using guest-local-user (token was: %s)", token)
+        return {
+            "sub": "guest-local-user",
+            "email": "guest@local.invalid",
+            "cognito:username": "guest-local",
+            "auth_mode": "dev_user_id",
+        }
+
     if _verifier is None:
         logger.error("Cognito verifier not initialized")
         raise HTTPException(
@@ -150,5 +169,4 @@ def get_current_user(
             detail="Authentication system not initialized",
         )
 
-    token = credentials.credentials
     return _verifier.verify_token(token)
