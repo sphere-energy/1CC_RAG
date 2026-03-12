@@ -11,7 +11,9 @@ from src.chat.schemas import (
     ChatRequest,
     ChatResponse,
     ConversationDetail,
+    ConversationListItem,
     ConversationListResponse,
+    ConversationRenameRequest,
     PersonalizationUpdate,
     ProfileMemoryCreate,
 )
@@ -235,5 +237,25 @@ async def delete_conversation(
 
     try:
         service.delete_conversation(conv_uuid)
+    except APIException as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+
+
+@router.patch("/conversations/{conversation_id}", response_model=ConversationListItem)
+async def rename_conversation(
+    conversation_id: str,
+    payload: ConversationRenameRequest,
+    service: ChatService = Depends(get_chat_service),
+):
+    from uuid import UUID
+
+    try:
+        conv_uuid = UUID(conversation_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid conversation ID")
+
+    try:
+        result = service.rename_conversation(conv_uuid, payload.title)
+        return ConversationListItem(**result)
     except APIException as e:
         raise HTTPException(status_code=e.status_code, detail=e.message)

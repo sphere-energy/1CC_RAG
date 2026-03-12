@@ -243,6 +243,36 @@ class ChatService:
         self.db.commit()
         logger.info("Deleted conversation %s for user %s", conversation_id, self.user.id)
 
+    def rename_conversation(self, conversation_id: UUID, title: str) -> dict:
+        """Rename a conversation. Returns updated conversation data."""
+        conv = (
+            self.db.query(Conversation)
+            .filter(Conversation.id == conversation_id)
+            .first()
+        )
+        if conv is None:
+            raise APIException(
+                message="Conversation not found",
+                status_code=404,
+                error_type="not_found",
+            )
+        if conv.user_id != self.user.id:
+            raise APIException(
+                message="You are not authorized to rename this conversation",
+                status_code=403,
+                error_type="authorization_error",
+            )
+        conv.title = title.strip()[:120]
+        self.db.commit()
+        self.db.refresh(conv)
+        logger.info("Renamed conversation %s to '%s'", conversation_id, conv.title)
+        return {
+            "id": conv.id,
+            "title": conv.title,
+            "created_at": conv.created_at,
+            "updated_at": conv.updated_at,
+        }
+
     def list_conversations(self, limit: int = 50, offset: int = 0) -> tuple[list[dict], int]:
         """List conversations for the current user, newest first."""
         from sqlalchemy import func
