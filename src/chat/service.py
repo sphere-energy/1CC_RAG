@@ -241,7 +241,9 @@ class ChatService:
             )
         self.db.delete(conv)
         self.db.commit()
-        logger.info("Deleted conversation %s for user %s", conversation_id, self.user.id)
+        logger.info(
+            "Deleted conversation %s for user %s", conversation_id, self.user.id
+        )
 
     def rename_conversation(self, conversation_id: UUID, title: str) -> dict:
         """Rename a conversation. Returns updated conversation data."""
@@ -273,7 +275,9 @@ class ChatService:
             "updated_at": conv.updated_at,
         }
 
-    def list_conversations(self, limit: int = 50, offset: int = 0) -> tuple[list[dict], int]:
+    def list_conversations(
+        self, limit: int = 50, offset: int = 0
+    ) -> tuple[list[dict], int]:
         """List conversations for the current user, newest first."""
         from sqlalchemy import func
 
@@ -283,8 +287,7 @@ class ChatService:
         total = base_query.count()
 
         conversations = (
-            base_query
-            .order_by(Conversation.updated_at.desc())
+            base_query.order_by(Conversation.updated_at.desc())
             .offset(offset)
             .limit(limit)
             .all()
@@ -297,13 +300,15 @@ class ChatService:
                 .filter(DBMessage.conversation_id == conv.id)
                 .scalar()
             )
-            items.append({
-                "id": conv.id,
-                "title": conv.title,
-                "created_at": conv.created_at,
-                "updated_at": conv.updated_at,
-                "message_count": msg_count or 0,
-            })
+            items.append(
+                {
+                    "id": conv.id,
+                    "title": conv.title,
+                    "created_at": conv.created_at,
+                    "updated_at": conv.updated_at,
+                    "message_count": msg_count or 0,
+                }
+            )
 
         return items, total
 

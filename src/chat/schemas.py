@@ -80,4 +80,6 @@ class ConversationListResponse(BaseModel):
 
 
 class ConversationRenameRequest(BaseModel):
-    title: str = Field(..., min_length=1, max_length=120, description="New conversation title")
+    title: str = Field(
+        ..., min_length=1, max_length=120, description="New conversation title"
+    )

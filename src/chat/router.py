@@ -245,6 +245,7 @@ async def delete_conversation(
 async def rename_conversation(
     conversation_id: str,
     payload: ConversationRenameRequest,
+    _current_user: dict = Depends(get_current_user),
     service: ChatService = Depends(get_chat_service),
 ):
     from uuid import UUID
