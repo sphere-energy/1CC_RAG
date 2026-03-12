@@ -141,3 +141,133 @@ def test_chat_endpoint_api_exception_maps_status_code(client, mock_chat_service)
         headers={"Authorization": "Bearer valid-token"},
     )
     assert response.status_code == 403
+
+
+# --- Conversation Rename Tests ---
+
+
+def test_rename_conversation_requires_authentication(client, mock_chat_service):
+    conversation_id = str(uuid4())
+    response = client.patch(
+        f"/api/v1/conversations/{conversation_id}",
+        json={"title": "New Title"},
+    )
+    assert response.status_code == 401
+
+
+def test_rename_conversation_success(client, mock_chat_service):
+    conversation_id = uuid4()
+    mock_chat_service.rename_conversation.return_value = {
+        "id": conversation_id,
+        "title": "New Title",
+        "created_at": "2024-01-01T00:00:00",
+        "updated_at": "2024-01-01T00:00:00",
+    }
+
+    app.dependency_overrides[get_current_user] = lambda: {
+        "sub": "test-user-id",
+        "email": "test@example.com",
+    }
+
+    response = client.patch(
+        f"/api/v1/conversations/{conversation_id}",
+        json={"title": "New Title"},
+        headers={"Authorization": "Bearer valid-token"},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["title"] == "New Title"
+    mock_chat_service.rename_conversation.assert_called_once_with(
+        conversation_id, "New Title"
+    )
+
+
+def test_rename_conversation_not_found(client, mock_chat_service):
+    conversation_id = uuid4()
+    mock_chat_service.rename_conversation.side_effect = APIException(
+        message="Conversation not found",
+        status_code=404,
+        error_type="not_found",
+    )
+
+    app.dependency_overrides[get_current_user] = lambda: {
+        "sub": "test-user-id",
+        "email": "test@example.com",
+    }
+
+    response = client.patch(
+        f"/api/v1/conversations/{conversation_id}",
+        json={"title": "New Title"},
+        headers={"Authorization": "Bearer valid-token"},
+    )
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Conversation not found"
+
+
+def test_rename_conversation_unauthorized(client, mock_chat_service):
+    conversation_id = uuid4()
+    mock_chat_service.rename_conversation.side_effect = APIException(
+        message="You are not authorized to rename this conversation",
+        status_code=403,
+        error_type="authorization_error",
+    )
+
+    app.dependency_overrides[get_current_user] = lambda: {
+        "sub": "test-user-id",
+        "email": "test@example.com",
+    }
+
+    response = client.patch(
+        f"/api/v1/conversations/{conversation_id}",
+        json={"title": "New Title"},
+        headers={"Authorization": "Bearer valid-token"},
+    )
+    assert response.status_code == 403
+    assert "not authorized" in response.json()["detail"]
+
+
+def test_rename_conversation_invalid_uuid(client, mock_chat_service):
+    app.dependency_overrides[get_current_user] = lambda: {
+        "sub": "test-user-id",
+        "email": "test@example.com",
+    }
+
+    response = client.patch(
+        "/api/v1/conversations/not-a-uuid",
+        json={"title": "New Title"},
+        headers={"Authorization": "Bearer valid-token"},
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Invalid conversation ID"
+
+
+def test_rename_conversation_empty_title(client, mock_chat_service):
+    conversation_id = uuid4()
+
+    app.dependency_overrides[get_current_user] = lambda: {
+        "sub": "test-user-id",
+        "email": "test@example.com",
+    }
+
+    response = client.patch(
+        f"/api/v1/conversations/{conversation_id}",
+        json={"title": ""},
+        headers={"Authorization": "Bearer valid-token"},
+    )
+    assert response.status_code == 422  # Pydantic validation error
+
+
+def test_rename_conversation_title_too_long(client, mock_chat_service):
+    conversation_id = uuid4()
+
+    app.dependency_overrides[get_current_user] = lambda: {
+        "sub": "test-user-id",
+        "email": "test@example.com",
+    }
+
+    response = client.patch(
+        f"/api/v1/conversations/{conversation_id}",
+        json={"title": "x" * 121},  # 121 chars, max is 120
+        headers={"Authorization": "Bearer valid-token"},
+    )
+    assert response.status_code == 422  # Pydantic validation error

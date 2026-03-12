@@ -77,3 +77,9 @@ class ConversationDetail(BaseModel):
 class ConversationListResponse(BaseModel):
     items: list[ConversationListItem]
     total: int
+
+
+class ConversationRenameRequest(BaseModel):
+    title: str = Field(
+        ..., min_length=1, max_length=120, description="New conversation title"
+    )
