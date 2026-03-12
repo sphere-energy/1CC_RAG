@@ -151,10 +151,11 @@ def get_current_user(
 
     token = credentials.credentials
 
-    # In development mode, accept plain user IDs (non-JWT tokens)
+    # In development mode, accept plain user IDs (non-JWT tokens) or demo tokens
     # Use consistent dev user ID so all devs see the same conversations
-    if settings.environment == "dev" and not _is_jwt_format(token):
-        logger.info("Dev mode: using guest-local-user (token was: %s)", token)
+    is_demo_token = token.startswith("demo-")
+    if settings.environment == "dev" and (not _is_jwt_format(token) or is_demo_token):
+        logger.info("Dev mode: using guest-local-user (token was: %s)", token[:20])
         return {
             "sub": "guest-local-user",
             "email": "guest@local.invalid",
