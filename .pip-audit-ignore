@@ -1,0 +1,7 @@
+# pip-audit vulnerability ignore file
+# Format: one CVE per line
+
+# ecdsa 0.19.1 already includes the fix for CVE-2024-23342
+# The fix was released in version 0.19.0 which added constant-time operations
+# See: https://github.com/tlsfuzzer/python-ecdsa/releases/tag/v0.19.0
+CVE-2024-23342

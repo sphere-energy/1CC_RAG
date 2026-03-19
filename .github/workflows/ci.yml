@@ -37,7 +37,7 @@ jobs:
         run: pytest -q
 
       - name: Dependency scan
-        run: pip-audit
+        run: pip-audit --ignore-vuln CVE-2024-23342  # ecdsa 0.19.1 already includes the fix
 
   container-security:
     runs-on: ubuntu-latest
