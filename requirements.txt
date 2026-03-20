@@ -24,6 +24,7 @@ psycopg2-binary
 python-jose[cryptography]
 python-multipart
 requests
+ecdsa>=0.19.0  # Pinned to ensure CVE-2024-23342 fix is always present
 
 # Circuit Breaker
 pybreaker
