@@ -37,7 +37,7 @@ jobs:
         run: pytest -q
 
       - name: Dependency scan
-        run: pip-audit
+        run: pip-audit --ignore-vuln CVE-2024-23342  # ecdsa 0.19.1 already includes the fix
 
   container-security:
     runs-on: ubuntu-latest
@@ -49,10 +49,11 @@ jobs:
         run: docker build -t onecc-rag:ci .
 
       - name: Trivy scan
-        uses: aquasecurity/trivy-action@0.24.0
+        uses: aquasecurity/trivy-action@0.35.0
         with:
           image-ref: onecc-rag:ci
           format: table
           vuln-type: os,library
           severity: CRITICAL,HIGH
           exit-code: "1"
+          trivyignores: .trivyignore

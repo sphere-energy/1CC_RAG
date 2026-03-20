@@ -1,13 +1,28 @@
 import os
+
+# Force test environment (must be before imports)
+# Using setdefault allows CI to override if needed
+os.environ.setdefault("ENVIRONMENT", "test")
+os.environ.setdefault("DATABASE_URL", "sqlite:///./test.db")
+os.environ.setdefault("COGNITO_USER_POOL_ID", "eu-central-1_test")
+os.environ.setdefault("ALLOW_UNAUTHENTICATED_REQUESTS", "false")
+
 from unittest.mock import MagicMock
 from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
 
-os.environ.setdefault("ENVIRONMENT", "test")
-os.environ.setdefault("DATABASE_URL", "sqlite:///./test.db")
-os.environ.setdefault("COGNITO_USER_POOL_ID", "eu-central-1_test")
+from src.core.config import get_settings
+
+
+@pytest.fixture(scope="session", autouse=True)
+def clear_settings_cache():
+    """Clear settings cache at start and end of test session."""
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
 
 from src.chat.router import get_chat_service
 from src.chat.service import ChatService

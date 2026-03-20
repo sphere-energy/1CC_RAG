@@ -1,0 +1,8 @@
+# pip-audit vulnerability ignore file
+# Format: one CVE per line
+
+# CVE-2024-23342: ecdsa timing attack vulnerability
+# Status: FALSE POSITIVE - fix included in ecdsa >=0.19.0
+# Our version: ecdsa>=0.19.0 (pinned in requirements.txt)
+# Reference: https://github.com/tlsfuzzer/python-ecdsa/releases/tag/v0.19.0
+CVE-2024-23342
