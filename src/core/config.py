@@ -66,7 +66,7 @@ class Settings(BaseSettings):
     allow_unauthenticated_requests: bool = False
 
     # External dependency resiliency
-    external_timeout_seconds: float = 15.0
+    external_timeout_seconds: float = 120.0
     external_retries: int = 3
     external_backoff_base_seconds: float = 0.25
     external_backoff_max_seconds: float = 3.0
