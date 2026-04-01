@@ -22,6 +22,8 @@ class Settings(BaseSettings):
 
     # AWS Configuration
     aws_region: str = "eu-central-1"
+    aws_access_key_id: str | None = None
+    aws_secret_access_key: str | None = None
     bedrock_embedding_model_id: str = (
         "arn:aws:bedrock:eu-central-1:407179558514:"
         "inference-profile/eu.cohere.embed-v4:0"

@@ -42,6 +42,8 @@ class BedrockClient:
             self.bedrock_runtime = boto3.client(
                 service_name="bedrock-runtime",
                 region_name=settings.aws_region,
+                aws_access_key_id=settings.aws_access_key_id or None,
+                aws_secret_access_key=settings.aws_secret_access_key or None,
                 config=config,
             )
             self.embedding_model_id = settings.bedrock_embedding_model_id
