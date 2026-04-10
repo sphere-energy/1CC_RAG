@@ -1,7 +1,7 @@
 # Multi-stage Dockerfile for production-ready FastAPI application
 
 # Stage 1: Builder
-FROM python:3.12-slim as builder
+FROM python:3.12-slim AS builder
 
 WORKDIR /app
 
@@ -44,7 +44,10 @@ ENV PATH=/home/appuser/.local/bin:$PATH
 # Environment variables (can be overridden)
 ENV PORT=8000 \
     GUNICORN_WORKERS=4 \
-    LOG_LEVEL=info
+    ENVIRONMENT=prod \
+    APP_NAME=1CC-RAG-API \
+    APP_VERSION=1.0.0-production \
+    LOG_LEVEL=INFO
 
 # Expose port
 EXPOSE 8000

@@ -1,0 +1,278 @@
+#.github/workflows/deploy.yml
+
+name: Deploy Backend to EC2
+
+# This workflow runs on any push to the main branch.
+on:
+  push:
+    branches:
+      - main
+
+# Environment variables available to all jobs in the workflow.
+env:
+  AWS_REGION: "eu-central-1"
+  CONTAINER_NAME: "1cc-rag-api"
+
+# Set default permissions for the GITHUB_TOKEN to read-only for security.
+# Specific permissions are granted to jobs where needed.
+permissions:
+  contents: read
+
+jobs:
+  ################################################################
+  # JOB 1: Build, tag, and push the Docker image to Amazon ECR.  #
+  ################################################################
+  build:
+    name: Build and Push to ECR
+    runs-on: ubuntu-latest
+
+    # Grant the 'id-token: write' permission required for OIDC authentication.
+    permissions:
+      contents: read # needed for checkout
+      id-token: write # for OIDC access to AWS
+
+    steps:
+      # Step 1: Check out the repository code.
+      # Pinned to a specific commit SHA for security to prevent supply-chain attacks.
+      - name: Checkout repository
+        uses: actions/checkout@v4 # v4.1.1
+        with:
+          token: ${{ github.token }}
+
+      # Step 2: Configure AWS credentials using OIDC.
+      # This step exchanges a GitHub-issued OIDC token for temporary AWS credentials.
+      # No long-lived secrets are stored in GitHub.
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4.2.1 # v4.2.1
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/GitHubActions-EC2-DeployRole
+          aws-region: ${{ env.AWS_REGION }}
+
+      # Step 3: Log in to the Amazon ECR registry.
+      # This uses the temporary credentials obtained in the previous step.
+      - name: Log in to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2 # v2.2.0
+
+      # Step 4: Build and push the Docker image.
+      # The image is tagged with the commit SHA for precise version tracking.
+      # Caching is enabled to speed up subsequent builds.
+      - name: 🐳 Enable containerd image store
+        uses: docker/setup-docker-action@v4
+        with:
+          daemon-config: |
+            {
+              "features": {
+                "containerd-snapshotter": true
+              }
+            }
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build, tag, and push image to Amazon ECR
+        id: build-image
+        uses: docker/build-push-action@v6
+        with:
+          push: true
+          platforms: linux/amd64,linux/arm64
+          context: .
+          tags: ${{ secrets.ECR_REGISTRY_URL_DEV }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  #############################################################
+  # JOB 2: Deploy the new Docker image to the EC2 instance    #
+  #############################################################
+  deploy:
+    name: Deploy to EC2
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      id-token: write    # needed for OIDC trust
+      contents: none     # no code checkout on this job
+
+    steps:
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4.2.1
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/GitHubActions-EC2-DeployRole
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Deploy via SSM
+        shell: bash
+        env:
+          INSTANCE_ID: ${{ secrets.EC2_INSTANCE_ID_DEV }}
+          ECR_REGISTRY: ${{ secrets.ECR_REGISTRY_URL_DEV }}
+          IMAGE_TAG: ${{ github.sha }}
+          CONTAINER_NAME: ${{ env.CONTAINER_NAME }}
+          PORT: ${{ secrets.PORT || '8000' }}
+          GUNICORN_WORKERS: ${{ secrets.GUNICORN_WORKERS || '4' }}
+
+          # Runtime/app configuration
+          ENVIRONMENT: ${{ secrets.ENVIRONMENT || 'prod' }}
+          CORS_ORIGINS: ${{ secrets.CORS_ORIGINS }}
+
+          # Core infrastructure
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DATABASE_POOL_SIZE: ${{ secrets.DATABASE_POOL_SIZE || '10' }}
+          DATABASE_MAX_OVERFLOW: ${{ secrets.DATABASE_MAX_OVERFLOW || '20' }}
+          DATABASE_ECHO: ${{ secrets.DATABASE_ECHO || 'False' }}
+
+          # Qdrant
+          QDRANT_HOST: ${{ secrets.QDRANT_HOST }}
+          QDRANT_PORT: ${{ secrets.QDRANT_PORT || '6333' }}
+          QDRANT_COLLECTION_NAME: ${{ secrets.QDRANT_COLLECTION_NAME || '1cc_legislation' }}
+
+          # AWS / Bedrock
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          BEDROCK_EMBEDDING_MODEL_ID: ${{ secrets.BEDROCK_EMBEDDING_MODEL_ID }}
+          BEDROCK_TEXT_MODEL_ID: ${{ secrets.BEDROCK_TEXT_MODEL_ID }}
+
+          # Cognito
+          COGNITO_REGION: ${{ secrets.COGNITO_REGION || env.AWS_REGION }}
+          COGNITO_USER_POOL_ID: ${{ secrets.COGNITO_USER_POOL_ID }}
+          COGNITO_CLIENT_ID: ${{ secrets.COGNITO_CLIENT_ID }}
+
+          # Resiliency and safety controls
+          CIRCUIT_BREAKER_FAIL_MAX: ${{ secrets.CIRCUIT_BREAKER_FAIL_MAX || '5' }}
+          CIRCUIT_BREAKER_TIMEOUT: ${{ secrets.CIRCUIT_BREAKER_TIMEOUT || '60' }}
+          RATE_LIMIT: ${{ secrets.RATE_LIMIT || '5/minute' }}
+          LOG_LEVEL: ${{ secrets.LOG_LEVEL || 'INFO' }}
+
+          # Dev/testing auth fallback (name used by this codebase)
+          ALLOW_UNAUTHENTICATED_REQUESTS: ${{ secrets.ALLOW_UNAUTHENTICATED_REQUESTS || secrets.ALLOW_MOCK_AUTH || 'false' }}
+
+          # Optional app metadata
+          APP_NAME: ${{ secrets.APP_NAME || '1CC-RAG-API' }}
+          APP_VERSION: ${{ secrets.APP_VERSION || '1.0.0-production' }}
+        run: |
+          if ! command -v envsubst >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y gettext-base
+          fi
+
+          echo "🔎 Preflight: validating AWS identity and instance state"
+          aws sts get-caller-identity --output json
+
+          EC2_STATE=$(aws ec2 describe-instances \
+            --region "$AWS_REGION" \
+            --instance-ids "$INSTANCE_ID" \
+            --query 'Reservations[0].Instances[0].State.Name' \
+            --output text)
+
+          if [[ "$EC2_STATE" == "None" || -z "$EC2_STATE" ]]; then
+            echo "❌ EC2 instance not found in this account/region. Check EC2_INSTANCE_ID_DEV and AWS_REGION."
+            exit 1
+          fi
+
+          if [[ "$EC2_STATE" != "running" ]]; then
+            echo "❌ EC2 instance state is '$EC2_STATE' (must be 'running' for SSM deploy)."
+            exit 1
+          fi
+
+          SSM_PING=$(aws ssm describe-instance-information \
+            --region "$AWS_REGION" \
+            --filters "Key=InstanceIds,Values=$INSTANCE_ID" \
+            --query 'InstanceInformationList[0].PingStatus' \
+            --output text)
+
+          if [[ "$SSM_PING" != "Online" ]]; then
+            echo "❌ SSM managed node status is '$SSM_PING' (must be 'Online')."
+            echo "   Verify SSM Agent is running and instance IAM role includes AmazonSSMManagedInstanceCore."
+            exit 1
+          fi
+
+          DEPLOY_SCRIPT=$(cat <<'SCRIPT'
+          #!/usr/bin/env bash
+          set -euxo pipefail
+
+          echo "🔑 Logging in to ECR…"
+          aws ecr get-login-password --region ${AWS_REGION} | \
+            docker login --username AWS --password-stdin ${ECR_REGISTRY}
+
+          IMAGE="${ECR_REGISTRY}:${IMAGE_TAG}"
+          echo "⬇️  Pulling ${IMAGE}"
+          docker pull "${IMAGE}"
+
+          echo "🛑 Stopping old container…"
+          docker stop "${CONTAINER_NAME}" || true
+          docker rm "${CONTAINER_NAME}" || true
+          docker image prune -af
+
+          echo "🚀 Starting new container…"
+          docker run -d \
+            --name "${CONTAINER_NAME}" \
+            --restart always \
+            --network host \
+            -e PORT="${PORT}" \
+            -e GUNICORN_WORKERS="${GUNICORN_WORKERS}" \
+            -e ENVIRONMENT="${ENVIRONMENT}" \
+            -e APP_NAME="${APP_NAME}" \
+            -e APP_VERSION="${APP_VERSION}" \
+            -e CORS_ORIGINS="${CORS_ORIGINS}" \
+            -e DATABASE_URL="${DATABASE_URL}" \
+            -e DATABASE_POOL_SIZE="${DATABASE_POOL_SIZE}" \
+            -e DATABASE_MAX_OVERFLOW="${DATABASE_MAX_OVERFLOW}" \
+            -e DATABASE_ECHO="${DATABASE_ECHO}" \
+            -e QDRANT_HOST="${QDRANT_HOST}" \
+            -e QDRANT_PORT="${QDRANT_PORT}" \
+            -e QDRANT_COLLECTION_NAME="${QDRANT_COLLECTION_NAME}" \
+            -e AWS_REGION="${AWS_REGION}" \
+            -e AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID}" \
+            -e AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}" \
+            -e BEDROCK_EMBEDDING_MODEL_ID="${BEDROCK_EMBEDDING_MODEL_ID}" \
+            -e BEDROCK_TEXT_MODEL_ID="${BEDROCK_TEXT_MODEL_ID}" \
+            -e COGNITO_REGION="${COGNITO_REGION}" \
+            -e COGNITO_USER_POOL_ID="${COGNITO_USER_POOL_ID}" \
+            -e COGNITO_CLIENT_ID="${COGNITO_CLIENT_ID}" \
+            -e CIRCUIT_BREAKER_FAIL_MAX="${CIRCUIT_BREAKER_FAIL_MAX}" \
+            -e CIRCUIT_BREAKER_TIMEOUT="${CIRCUIT_BREAKER_TIMEOUT}" \
+            -e RATE_LIMIT="${RATE_LIMIT}" \
+            -e LOG_LEVEL="${LOG_LEVEL}" \
+            -e ALLOW_UNAUTHENTICATED_REQUESTS="${ALLOW_UNAUTHENTICATED_REQUESTS}" \
+            "${IMAGE}"
+
+          echo "✅ Deploy complete at $(date)"
+          SCRIPT
+          )
+
+          # Render only known placeholders to avoid command breakage with special chars in secrets.
+          RENDERED=$(printf '%s' "$DEPLOY_SCRIPT" | envsubst '${CONTAINER_NAME} ${AWS_REGION} ${ECR_REGISTRY} ${IMAGE_TAG} ${PORT} ${GUNICORN_WORKERS} ${ENVIRONMENT} ${APP_NAME} ${APP_VERSION} ${CORS_ORIGINS} ${DATABASE_URL} ${DATABASE_POOL_SIZE} ${DATABASE_MAX_OVERFLOW} ${DATABASE_ECHO} ${QDRANT_HOST} ${QDRANT_PORT} ${QDRANT_COLLECTION_NAME} ${AWS_ACCESS_KEY_ID} ${AWS_SECRET_ACCESS_KEY} ${BEDROCK_EMBEDDING_MODEL_ID} ${BEDROCK_TEXT_MODEL_ID} ${COGNITO_REGION} ${COGNITO_USER_POOL_ID} ${COGNITO_CLIENT_ID} ${CIRCUIT_BREAKER_FAIL_MAX} ${CIRCUIT_BREAKER_TIMEOUT} ${RATE_LIMIT} ${LOG_LEVEL} ${ALLOW_UNAUTHENTICATED_REQUESTS}')
+
+          # Build SSM parameters JSON.
+          jq -Rn --arg script "$RENDERED" \
+            '{ commands: ($script | split("\n") | map(select(length > 0))) }' \
+            > ssm-params.json
+
+          # Send the command.
+          CMD_ID=$(aws ssm send-command \
+            --region "$AWS_REGION" \
+            --instance-ids "$INSTANCE_ID" \
+            --document-name "AWS-RunShellScript" \
+            --comment "Deploy $IMAGE_TAG" \
+            --parameters file://ssm-params.json \
+            --timeout-seconds 600 \
+            --query "Command.CommandId" \
+            --output text)
+
+          echo "⏱  Waiting for SSM command ${CMD_ID}…"
+          aws ssm wait command-executed \
+            --command-id "$CMD_ID" \
+            --instance-id "$INSTANCE_ID" 2>/dev/null || true
+
+          STATUS=$(aws ssm get-command-invocation \
+            --instance-id "$INSTANCE_ID" \
+            --command-id "$CMD_ID" \
+            --query "Status" --output text)
+
+          if [[ "$STATUS" == "Success" ]]; then
+            echo "✅ Deployment succeeded"
+          else
+            echo "❌ Deployment ended with status: $STATUS"
+            aws ssm get-command-invocation \
+              --instance-id "$INSTANCE_ID" \
+              --command-id "$CMD_ID" \
+              --output json | jq -r '.StandardOutputContent, .StandardErrorContent'
+            exit 1
+          fi
