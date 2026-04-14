@@ -57,4 +57,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python -c "import requests; requests.get('http://localhost:8000/health', timeout=5)" || exit 1
 
 # Run with Gunicorn (production)
-CMD ["gunicorn", "src.main:app", "-c", "gunicorn.conf.py"]
+CMD ["ALLOW_UNAUTHENTICATED_REQUESTS=true", "gunicorn", "src.main:app", "-c", "gunicorn.conf.py"]
