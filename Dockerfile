@@ -47,6 +47,7 @@ ENV PORT=8000 \
     ENVIRONMENT=prod \
     APP_NAME=1CC-RAG-API \
     APP_VERSION=1.0.0-production \
+    ALLOW_UNAUTHENTICATED_REQUESTS=false \
     LOG_LEVEL=INFO
 
 # Expose port
@@ -57,4 +58,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python -c "import requests; requests.get('http://localhost:8000/health', timeout=5)" || exit 1
 
 # Run with Gunicorn (production)
-CMD ["ALLOW_UNAUTHENTICATED_REQUESTS=true", "gunicorn", "src.main:app", "-c", "gunicorn.conf.py"]
+CMD ["gunicorn", "src.main:app", "-c", "gunicorn.conf.py"]

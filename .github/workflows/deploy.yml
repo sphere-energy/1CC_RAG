@@ -141,7 +141,7 @@ jobs:
           LOG_LEVEL: ${{ secrets.LOG_LEVEL || 'INFO' }}
 
           # Dev/testing auth fallback (name used by this codebase)
-          ALLOW_UNAUTHENTICATED_REQUESTS: ${{ secrets.ALLOW_UNAUTHENTICATED_REQUESTS || secrets.ALLOW_MOCK_AUTH || 'true' }}
+          ALLOW_UNAUTHENTICATED_REQUESTS: ${{ secrets.ALLOW_UNAUTHENTICATED_REQUESTS || secrets.ALLOW_MOCK_AUTH || 'false' }}
 
           # Optional app metadata
           APP_NAME: ${{ secrets.APP_NAME || '1CC-RAG-API' }}
