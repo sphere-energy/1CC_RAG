@@ -1,8 +1,8 @@
 import json
 import logging
 import re
-from datetime import datetime
 from collections.abc import Iterator
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
@@ -242,7 +242,9 @@ class ChatService:
         self.db.delete(conv)
         self.db.commit()
         logger.info(
-            "Deleted conversation %s for user %s", conversation_id, self.user.id
+            "Deleted conversation %s for user %s",
+            conversation_id,
+            self.user.id,
         )
 
     def rename_conversation(self, conversation_id: UUID, title: str) -> dict:
@@ -276,13 +278,15 @@ class ChatService:
         }
 
     def list_conversations(
-        self, limit: int = 50, offset: int = 0
+        self,
+        limit: int = 50,
+        offset: int = 0,
     ) -> tuple[list[dict], int]:
         """List conversations for the current user, newest first."""
         from sqlalchemy import func
 
         base_query = self.db.query(Conversation).filter(
-            Conversation.user_id == self.user.id
+            Conversation.user_id == self.user.id,
         )
         total = base_query.count()
 
@@ -307,7 +311,7 @@ class ChatService:
                     "created_at": conv.created_at,
                     "updated_at": conv.updated_at,
                     "message_count": msg_count or 0,
-                }
+                },
             )
 
         return items, total
@@ -326,7 +330,8 @@ class ChatService:
     def _extract_profile_memories(self, messages: list[Message]) -> list[str]:
         profile_memories: list[str] = []
         pattern = re.compile(
-            r"\b(i prefer|my preference|please always|remember that)\b", re.IGNORECASE
+            r"\b(i prefer|my preference|please always|remember that)\b",
+            re.IGNORECASE,
         )
         for msg in messages:
             if msg.role == "user" and pattern.search(msg.content):
@@ -348,6 +353,14 @@ class ChatService:
             "prohibited",
             "penalty",
             "exemption",
+            "procedure",
+            "policy",
+            "process",
+            "guideline",
+            "responsible",
+            "approval",
+            "documentation",
+            "standard",
         }
         selected: list[str] = []
         for msg in messages[:-1]:
@@ -368,10 +381,41 @@ class ChatService:
         ):
             return "follow_up_clarification"
         if any(
-            token in query for token in ["recipe", "movie", "football", "travel plan"]
+            token in query
+            for token in [
+                "recipe",
+                "movie",
+                "football",
+                "travel plan",
+                "song lyrics",
+                "sports score",
+                "weather",
+                "stock price",
+            ]
         ):
             return "out_of_domain"
-        return "legal_lookup"
+        if any(
+            token in query
+            for token in [
+                "legal",
+                "regulation",
+                "compliance",
+                "legislation",
+                "directive",
+                "law",
+                "obligation",
+                "penalty",
+                "fine",
+                "deadline",
+                "prohibited",
+                "exemption",
+                "article",
+                "statutory",
+                "decree",
+            ]
+        ):
+            return "legal_lookup"
+        return "document_lookup"
 
     def _sanitize_user_query(self, user_query: str) -> str:
         blocked_patterns = [
@@ -388,11 +432,13 @@ class ChatService:
     def _validate_output(self, text: str) -> str:
         cleaned = text.strip()
         if not cleaned:
-            return "I could not generate a safe legal answer right now. Please retry in a few moments."
+            return "I could not generate a safe answer right now. Please retry in a few moments."
         return cleaned
 
     def _append_uncertainty_if_needed(
-        self, response_text: str, has_sources: bool
+        self,
+        response_text: str,
+        has_sources: bool,
     ) -> str:
         if has_sources:
             return response_text
@@ -462,8 +508,9 @@ class ChatService:
         intent = self._classify_intent(user_query)
         if intent == "out_of_domain":
             out_of_domain_response = (
-                "This assistant handles legal and compliance topics for electronics and batteries. "
-                "Please ask a regulation or compliance-related question."
+                "I'm your 1CC & Techprotect personal assistant and I can help you find information "
+                "across all company documentation. Please ask a question related to company resources, "
+                "procedures, guidelines, or regulatory and compliance topics."
             )
             assistant_message_obj = DBMessage(
                 conversation_id=conversation.id,
@@ -621,7 +668,11 @@ class ChatService:
             def out_of_domain_stream() -> Iterator[dict[str, str]]:
                 yield {
                     "event": "data",
-                    "data": "This assistant handles legal and compliance topics for electronics and batteries.",
+                    "data": (
+                        "I'm your 1CC & Techprotect personal assistant and I can help you find information "
+                        "across all company documentation. Please ask a question related to company resources, "
+                        "procedures, guidelines, or regulatory and compliance topics."
+                    ),
                 }
 
             return out_of_domain_stream(), conversation.id
@@ -643,7 +694,8 @@ class ChatService:
         except QdrantException as exc:
             retrieval_error = exc
             logger.warning(
-                "Retrieval degraded for streaming conversation %s", conversation.id
+                "Retrieval degraded for streaming conversation %s",
+                conversation.id,
             )
 
         # 3. Format prompt
@@ -738,6 +790,274 @@ class ChatService:
 
         return stream_and_save(), conversation.id
 
+    def generate_response_for_document(
+        self,
+        messages: list[Message],
+        document_id: str | None = None,
+        title: str | None = None,
+        conversation_id: UUID | None = None,
+    ) -> tuple[str, UUID, UUID, dict[str, Any]]:
+        """
+        Generate a RAG response using ONLY the chunks from the pinned document.
+        Skips vector similarity search entirely — retrieval is filter-based.
+
+        Args:
+            messages: Conversation history.
+            document_id: Exact document_id to filter chunks by.
+            title: Exact title to filter chunks by.
+            conversation_id: Optional conversation ID to continue.
+
+        Returns:
+            tuple of (response_text, conversation_id, message_id, metadata).
+        """
+        logger.info(
+            "Processing pinned-document chat request (document_id=%s, title=%s)",
+            document_id,
+            title,
+        )
+
+        conversation = self._resolve_conversation(conversation_id)
+
+        user_message_obj = DBMessage(
+            conversation_id=conversation.id,
+            role="user",
+            content=messages[-1].content,
+        )
+        self.db.add(user_message_obj)
+        self.db.commit()
+
+        user_query = messages[-1].content
+        intent = self._classify_intent(user_query)
+        # Never short-circuit for out_of_domain — user explicitly pinned a document
+
+        context_docs: list[dict[str, Any]] = []
+        retrieval_diagnostics: dict[str, Any] = {
+            "retrieved_k": 0,
+            "rerank_scores": [],
+            "citation_coverage": 0.0,
+            "pinned_document": True,
+        }
+        retrieval_error = None
+
+        try:
+            context_docs, retrieval_diagnostics = self.retriever.retrieve_by_document(
+                document_id=document_id,
+                title=title,
+            )
+        except QdrantException as exc:
+            retrieval_error = exc
+            logger.warning(
+                "Pinned-document retrieval degraded for conversation %s",
+                conversation.id,
+            )
+
+        formatted_context = self._format_context(context_docs)
+        prompt = self._construct_prompt(messages, formatted_context, intent)
+        prompt = self._truncate_prompt(prompt)
+
+        response_text = self.llm_client.generate_text(prompt)
+        response_text = self._validate_output(response_text)
+        response_text = self._append_uncertainty_if_needed(
+            response_text,
+            has_sources=bool(context_docs),
+        )
+
+        sources = [
+            {
+                "title": doc.get("title"),
+                "document_id": doc.get("document_id"),
+                "score": doc.get("score"),
+                "chunk_id": doc.get("chunk_id"),
+            }
+            for doc in context_docs[:5]
+        ]
+        retrieval_diagnostics["citation_coverage"] = 1.0 if sources else 0.0
+
+        profile_memories = self._extract_profile_memories(messages)
+        if self.is_personalization_enabled():
+            for memory in profile_memories:
+                self.add_profile_memory(memory)
+            persisted_profile_memory = [
+                item["content"] for item in self.list_profile_memory()[:8]
+            ]
+        else:
+            persisted_profile_memory = []
+        history_summary = self._build_history_summary(messages)
+
+        metadata = {
+            "sources": sources,
+            "model": self.llm_client.text_model_id,
+            "intent": intent,
+            "degraded_mode": retrieval_error is not None,
+            "retrieval": retrieval_diagnostics,
+            "memory": {
+                "session_memory_messages": min(
+                    len(messages),
+                    self.settings.max_history_messages,
+                ),
+                "episodic_summary": history_summary,
+                "profile_memory": profile_memories,
+                "persisted_profile_memory": persisted_profile_memory,
+            },
+            "workflow": self._build_workflow_state(user_query, intent),
+        }
+
+        assistant_message_obj = DBMessage(
+            conversation_id=conversation.id,
+            role="assistant",
+            content=response_text,
+            message_metadata=metadata,
+        )
+        self.db.add(assistant_message_obj)
+
+        if not conversation.title and len(messages) == 1:
+            conversation.title = user_query[:100]
+
+        conversation.updated_at = datetime.utcnow()
+        self.db.commit()
+        self.db.refresh(assistant_message_obj)
+
+        logger.info("Pinned-document response generated and saved to database")
+        return response_text, conversation.id, assistant_message_obj.id, metadata
+
+    def generate_response_stream_for_document(
+        self,
+        messages: list[Message],
+        document_id: str | None = None,
+        title: str | None = None,
+        conversation_id: UUID | None = None,
+    ) -> tuple[Iterator[dict[str, str]], UUID]:
+        """
+        Streaming variant of generate_response_for_document.
+        Uses ONLY chunks from the pinned document — no vector similarity search.
+        """
+        logger.info(
+            "Processing streaming pinned-document chat request (document_id=%s, title=%s)",
+            document_id,
+            title,
+        )
+
+        conversation = self._resolve_conversation(conversation_id)
+
+        user_message_obj = DBMessage(
+            conversation_id=conversation.id,
+            role="user",
+            content=messages[-1].content,
+        )
+        self.db.add(user_message_obj)
+        self.db.commit()
+
+        user_query = messages[-1].content
+        intent = self._classify_intent(user_query)
+
+        context_docs: list[dict[str, Any]] = []
+        retrieval_diagnostics: dict[str, Any] = {
+            "retrieved_k": 0,
+            "rerank_scores": [],
+            "citation_coverage": 0.0,
+            "pinned_document": True,
+        }
+        retrieval_error = None
+
+        try:
+            context_docs, retrieval_diagnostics = self.retriever.retrieve_by_document(
+                document_id=document_id,
+                title=title,
+            )
+        except QdrantException as exc:
+            retrieval_error = exc
+            logger.warning(
+                "Pinned-document retrieval degraded for streaming conversation %s",
+                conversation.id,
+            )
+
+        formatted_context = self._format_context(context_docs)
+        prompt = self._construct_prompt(messages, formatted_context, intent)
+        prompt = self._truncate_prompt(prompt)
+
+        accumulated_response: list[str] = []
+
+        sources = [
+            {
+                "title": doc.get("title"),
+                "document_id": doc.get("document_id"),
+                "score": doc.get("score"),
+                "chunk_id": doc.get("chunk_id"),
+            }
+            for doc in context_docs[:5]
+        ]
+        retrieval_diagnostics["citation_coverage"] = 1.0 if sources else 0.0
+
+        profile_memories = self._extract_profile_memories(messages)
+        if self.is_personalization_enabled():
+            for memory in profile_memories:
+                self.add_profile_memory(memory)
+            persisted_profile_memory = [
+                item["content"] for item in self.list_profile_memory()[:8]
+            ]
+        else:
+            persisted_profile_memory = []
+        history_summary = self._build_history_summary(messages)
+
+        def stream_and_save() -> Iterator[dict[str, str]]:
+            yield {"event": "progress", "data": "retrieval_complete"}
+            for chunk in self.llm_client.generate_text_stream(prompt):
+                accumulated_response.append(chunk)
+                yield {"event": "data", "data": chunk}
+
+            full_response = "".join(accumulated_response)
+            full_response = self._validate_output(full_response)
+            full_response = self._append_uncertainty_if_needed(
+                full_response,
+                has_sources=bool(context_docs),
+            )
+
+            metadata = {
+                "sources": sources,
+                "model": self.llm_client.text_model_id,
+                "streaming": True,
+                "intent": intent,
+                "degraded_mode": retrieval_error is not None,
+                "retrieval": retrieval_diagnostics,
+                "memory": {
+                    "session_memory_messages": min(
+                        len(messages),
+                        self.settings.max_history_messages,
+                    ),
+                    "episodic_summary": history_summary,
+                    "profile_memory": profile_memories,
+                    "persisted_profile_memory": persisted_profile_memory,
+                },
+                "workflow": self._build_workflow_state(user_query, intent),
+            }
+
+            assistant_message_obj = DBMessage(
+                conversation_id=conversation.id,
+                role="assistant",
+                content=full_response,
+                message_metadata=metadata,
+            )
+            self.db.add(assistant_message_obj)
+
+            if not conversation.title and len(messages) == 1:
+                conversation.title = user_query[:100]
+
+            conversation.updated_at = datetime.utcnow()
+            self.db.commit()
+            yield {
+                "event": "metadata",
+                "data": json.dumps(
+                    {
+                        "intent": intent,
+                        "degraded_mode": retrieval_error is not None,
+                        "sources": sources,
+                    },
+                ),
+            }
+            logger.info("Streaming pinned-document response saved to database")
+
+        return stream_and_save(), conversation.id
+
     def _format_context(self, docs: list[dict]) -> str:
         """Format retrieved documents into a string."""
         formatted = []
@@ -748,7 +1068,10 @@ class ChatService:
         return "\n".join(formatted)
 
     def _construct_prompt(
-        self, messages: list[Message], context: str, intent: str
+        self,
+        messages: list[Message],
+        context: str,
+        intent: str,
     ) -> str:
         """Construct the prompt for the LLM with conversation history."""
         bounded_messages = messages[-self.settings.max_history_messages :]
@@ -761,23 +1084,22 @@ class ChatService:
         current_query = self._sanitize_user_query(messages[-1].content)
         summary = self._build_history_summary(bounded_messages)
 
+        is_legal_intent = intent in ("legal_lookup", "procedural_guidance")
+
         intent_instructions: dict[str, str] = {
             "legal_lookup": "Prioritize precise legal grounding and source-backed obligations.",
             "follow_up_clarification": "Resolve ambiguity from prior turns and explicitly state assumptions.",
             "procedural_guidance": "Provide step-by-step compliance actions and clearly name responsible actors.",
-            "out_of_domain": "Decline and redirect to legal/compliance topics.",
+            "document_lookup": "Provide a clear, informative answer based on the company documentation sources.",
+            "out_of_domain": "Decline and redirect to company documentation topics.",
         }
         intent_instruction = intent_instructions.get(
-            intent, intent_instructions["legal_lookup"]
+            intent,
+            intent_instructions["document_lookup"],
         )
 
-        return f"""
-You are Liggy, a senior legal consultant specializing in electronics and batteries regulation.
-You work at a prestigious European consulting firm, advising other consulting companies on electronics lifecycle compliance across Europe.
-
-Intent route: {intent}
-Instruction: {intent_instruction}
-
+        if is_legal_intent:
+            response_structure = """
 # RESPONSE STRUCTURE (MANDATORY)
 
 For each question, structure your response as follows:
@@ -785,8 +1107,9 @@ For each question, structure your response as follows:
 1. **One-Sentence Answer**: Provide a direct, actionable answer upfront
 2. **Detailed Explanation**: Break down the legal basis and implications
 3. **Actor-Specific Obligations**: List requirements by stakeholder (producer, PRO, authority, distributor, etc.)
-4. **Practical Implications**: Explain what this means in practice
+4. **Practical Implications**: Explain what this means in practice"""
 
+            citation_and_accuracy = """
 # LEGAL CITATION REQUIREMENTS (CRITICAL)
 
 Every legal reference MUST include a metadata block in this format:
@@ -803,12 +1126,37 @@ Every legal reference MUST include a metadata block in this format:
 
 1. **Source-Based Answers**: Base ALL legal interpretations exclusively on the provided sources below
 2. **Knowledge Gaps**: If sources are insufficient, clearly state: "⚠️ Based on my general knowledge (not in provided sources): [answer]"
-3. **Chronological Accuracy**: 
+3. **Chronological Accuracy**:
    - Always verify if legislation is current or superseded
    - Explicitly note when laws have been repealed or amended
    - Identify applicable transitional periods
 4. **Internal Consistency**: Never contradict yourself about the same paragraph/article within a response
-5. **Completeness**: Explain concepts thoroughly without assuming prior legal knowledge
+5. **Completeness**: Explain concepts thoroughly without assuming prior legal knowledge"""
+        else:
+            response_structure = """
+# RESPONSE STRUCTURE (MANDATORY)
+
+For each question, structure your response as follows:
+
+1. **Direct Answer**: Provide a clear, direct answer upfront
+2. **Context & Details**: Expand with relevant context from the documentation
+3. **Practical Takeaways**: Summarise the key points for the reader"""
+
+            citation_and_accuracy = """
+# ACCURACY & PRECISION STANDARDS
+
+1. **Source-Based Answers**: Base ALL answers exclusively on the provided documentation sources below
+2. **Knowledge Gaps**: If sources are insufficient, clearly state: "⚠️ Based on my general knowledge (not in provided sources): [answer]"
+3. **Internal Consistency**: Never contradict yourself within a response
+4. **Completeness**: Explain concepts clearly without assuming prior knowledge"""
+
+        return f"""
+You are the 1CC & Techprotect personal assistant. You help employees and consultants find information across all company documentation — including legal and regulatory materials, internal procedures, operational guidelines, product documentation, and any other company resources.
+
+Intent route: {intent}
+Instruction: {intent_instruction}
+{response_structure}
+{citation_and_accuracy}
 
 # FORMATTING GUIDELINES (IMPORTANT FOR READABILITY)
 
@@ -819,7 +1167,7 @@ Every legal reference MUST include a metadata block in this format:
   1. First item
   2. Second item
   3. Third item
-- Bold key terms and legal concepts
+- Bold key terms and important concepts
 - Use tables when comparing requirements across actors or jurisdictions
 - Separate paragraphs with blank lines for readability
 
@@ -833,7 +1181,7 @@ Every legal reference MUST include a metadata block in this format:
 
 ---
 
-## LEGAL SOURCES PROVIDED
+## DOCUMENTATION SOURCES PROVIDED
 {context}
 
 ---

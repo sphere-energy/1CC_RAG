@@ -14,6 +14,7 @@ from src.chat.schemas import (
     ConversationListItem,
     ConversationListResponse,
     ConversationRenameRequest,
+    DocumentChatRequest,
     PersonalizationUpdate,
     ProfileMemoryCreate,
 )
@@ -130,6 +131,82 @@ async def chat_endpoint(
             service.generate_response(
                 chat_request.messages,
                 chat_request.conversation_id,
+            )
+        )
+        return ChatResponse(
+            conversation_id=conversation_id,
+            message_id=message_id,
+            response=response_text,
+            metadata=metadata,
+        )
+
+    except APIException as e:
+        logger.error("APIException: %s", e.message)
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+    except Exception as e:
+        logger.error("Unexpected error: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.post("/chat/document", response_model=ChatResponse)
+@limiter.limit("5/minute")
+async def chat_document_endpoint(
+    request: Request,
+    chat_request: DocumentChatRequest,
+    _current_user: dict = Depends(get_current_user),
+    service: ChatService = Depends(get_chat_service),
+):
+    """
+    Chat endpoint that scopes RAG retrieval to a single pinned document.
+    Provide document_id and/or title in the body to bypass similarity search
+    and use ONLY the chunks belonging to that document.
+    """
+    if not chat_request.messages:
+        raise HTTPException(status_code=400, detail="No messages provided")
+
+    last_message = chat_request.messages[-1]
+    if last_message.role != "user":
+        raise HTTPException(status_code=400, detail="Last message must be from user")
+
+    try:
+        if chat_request.stream:
+            logger.info(
+                "Streaming pinned-document request for user: %s",
+                service.user.email,
+            )
+
+            async def event_generator():
+                try:
+                    stream_gen, conversation_id = (
+                        service.generate_response_stream_for_document(
+                            chat_request.messages,
+                            document_id=chat_request.document_id,
+                            title=chat_request.title,
+                            conversation_id=chat_request.conversation_id,
+                        )
+                    )
+                    yield {"event": "conversation_id", "data": str(conversation_id)}
+                    for event in stream_gen:
+                        yield event
+                except APIException as e:
+                    logger.error("APIException during streaming: %s", e.message)
+                    yield {"event": "error", "data": e.message}
+                except Exception as e:
+                    logger.error("Unexpected error during streaming: %s", e)
+                    yield {"event": "error", "data": "Internal server error"}
+
+            return EventSourceResponse(event_generator())
+
+        logger.info(
+            "Pinned-document request for user: %s",
+            service.user.email,
+        )
+        response_text, conversation_id, message_id, metadata = (
+            service.generate_response_for_document(
+                chat_request.messages,
+                document_id=chat_request.document_id,
+                title=chat_request.title,
+                conversation_id=chat_request.conversation_id,
             )
         )
         return ChatResponse(

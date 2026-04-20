@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class Message(BaseModel):
@@ -79,7 +79,36 @@ class ConversationListResponse(BaseModel):
     total: int
 
 
+class DocumentChatRequest(BaseModel):
+    conversation_id: UUID | None = Field(
+        None,
+        description="Optional conversation ID to continue existing conversation",
+    )
+    messages: list[Message] = Field(
+        ...,
+        description="A list of messages in the conversation",
+    )
+    stream: bool = Field(False, description="Whether to stream the response")
+    document_id: str | None = Field(
+        None,
+        description="Retrieve chunks only from the document with this exact document_id",
+    )
+    title: str | None = Field(
+        None,
+        description="Retrieve chunks only from the document with this exact title",
+    )
+
+    @model_validator(mode="after")
+    def at_least_one_filter(self) -> "DocumentChatRequest":
+        if not self.document_id and not self.title:
+            raise ValueError("At least one of document_id or title must be provided")
+        return self
+
+
 class ConversationRenameRequest(BaseModel):
     title: str = Field(
-        ..., min_length=1, max_length=120, description="New conversation title"
+        ...,
+        min_length=1,
+        max_length=120,
+        description="New conversation title",
     )

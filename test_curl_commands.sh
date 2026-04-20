@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Base URL
-API_URL="http://localhost:8001"
+API_URL="https://rag.api.bap.sphere-energy.eu"
 
 echo "========================================================"
 echo "Testing 1CC RAG API (Authentication Disabled)"

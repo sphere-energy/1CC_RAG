@@ -284,6 +284,105 @@ class QdrantRetriever:
         reranked.sort(key=lambda item: item["score"], reverse=True)
         return reranked
 
+    def retrieve_by_document(
+        self,
+        document_id: str | None = None,
+        title: str | None = None,
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        """
+        Retrieve all chunks for a specific document using filter-based scroll (no vector similarity).
+
+        Args:
+            document_id: Filter chunks by exact document_id value.
+            title: Filter chunks by exact title value.
+
+        Returns:
+            Tuple of (list of chunk dicts, diagnostics dict).
+
+        Raises:
+            QdrantException: If retrieval fails or circuit is open.
+        """
+        try:
+            return self.breaker.call(
+                self._retrieve_by_document_impl,
+                document_id,
+                title,
+            )
+        except CircuitBreakerError as e:
+            logger.error("Circuit breaker open for Qdrant: %s", e)
+            raise QdrantException(
+                message="Vector database temporarily unavailable. Please try again later.",
+                detail={"circuit_breaker": "open"},
+            )
+
+    def _retrieve_by_document_impl(
+        self,
+        document_id: str | None,
+        title: str | None,
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        """Internal implementation of document-filtered scroll retrieval."""
+        conditions = []
+        if document_id:
+            conditions.append(
+                FieldCondition(key="document_id", match=MatchValue(value=document_id)),
+            )
+        if title:
+            conditions.append(
+                FieldCondition(key="title", match=MatchValue(value=title)),
+            )
+
+        scroll_filter = Filter(must=conditions) if conditions else None
+
+        all_records = []
+        next_page_offset = None
+        while True:
+            records, next_page_offset = self._with_retries(
+                self.client.scroll,
+                collection_name=self.collection_name,
+                scroll_filter=scroll_filter,
+                limit=100,
+                offset=next_page_offset,
+                with_payload=True,
+                with_vectors=False,
+            )
+            all_records.extend(records)
+            if next_page_offset is None:
+                break
+
+        results: list[dict[str, Any]] = []
+        for record in all_records:
+            if record.payload:
+                results.append(
+                    {
+                        "text": record.payload.get("text", ""),
+                        "title": record.payload.get("title"),
+                        "document_id": record.payload.get("document_id"),
+                        "publication_date": record.payload.get("publication_date"),
+                        "chunk_level": record.payload.get("chunk_level"),
+                        "chunk_id": record.payload.get("chunk_id"),
+                        "score": 1.0,  # No similarity score — full document pinned
+                    },
+                )
+
+        # Sort by chunk_id to preserve logical reading order
+        results.sort(key=lambda x: x.get("chunk_id") or "")
+
+        diagnostics = {
+            "retrieved_k": len(results),
+            "rerank_scores": [],
+            "citation_coverage": 1.0 if results else 0.0,
+            "pinned_document": True,
+            "pinned_document_id": document_id,
+            "pinned_title": title,
+        }
+        logger.info(
+            "Retrieved %d chunks for document (id=%s, title=%s)",
+            len(results),
+            document_id,
+            title,
+        )
+        return results, diagnostics
+
     def _with_retries(self, func, *args, **kwargs):
         attempts = self.settings.qdrant_retries
         last_error = None
