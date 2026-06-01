@@ -487,6 +487,84 @@ class ChatService:
             "tool_contract_version": "1.0",
         }
 
+    def _infer_document_profile(
+        self,
+        context_docs: list[dict[str, Any]],
+        intent: str,
+    ) -> str:
+        """Infer dominant document profile from retrieved context and intent."""
+        if intent in ("legal_lookup", "procedural_guidance"):
+            return "legal_regulatory"
+
+        if not context_docs:
+            return "employee_general"
+
+        internal_keywords = {
+            "policy",
+            "procedure",
+            "handbook",
+            "hr",
+            "finance",
+            "payroll",
+            "expense",
+            "vacation",
+            "onboarding",
+            "internal",
+        }
+        legal_keywords = {
+            "law",
+            "directive",
+            "regulation",
+            "article",
+            "decree",
+            "compliance",
+            "legislation",
+        }
+
+        internal_votes = 0
+        legal_votes = 0
+
+        for doc in context_docs[:12]:
+            title = str(doc.get("title") or "").lower()
+            document_id = str(doc.get("document_id") or "").lower()
+            source_kind = str(doc.get("source_kind") or "").lower()
+            source_origin = str(doc.get("source_origin") or "").lower()
+            bag = " ".join([title, document_id, source_kind, source_origin])
+
+            if any(token in bag for token in legal_keywords):
+                legal_votes += 1
+            if any(token in bag for token in internal_keywords):
+                internal_votes += 1
+
+            if source_kind == "company":
+                internal_votes += 1
+            if source_kind == "user":
+                internal_votes += 0
+
+        if legal_votes >= 2 and legal_votes >= internal_votes:
+            return "legal_regulatory"
+        if internal_votes >= 2:
+            return "internal_company"
+        return "employee_general"
+
+    def _build_document_profile_guidance(self, document_profile: str) -> str:
+        if document_profile == "legal_regulatory":
+            return (
+                "Treat sources as legal or regulatory material. Prioritize legal precision, "
+                "article-level grounding, temporal validity, and actor-specific obligations."
+            )
+        if document_profile == "internal_company":
+            return (
+                "Treat sources as internal company documentation (for example HR, finance, "
+                "operations, and internal policies). Prioritize procedure clarity, ownership, "
+                "required steps, deadlines, and exceptions."
+            )
+        return (
+            "Treat sources as employee-provided or mixed-format documentation. Infer structure "
+            "from the content, summarize clearly, and answer directly even when style or format "
+            "is non-standard. Ask one concise clarification only when it materially improves accuracy."
+        )
+
     def generate_response(
         self,
         messages: list[Message],
@@ -544,7 +622,13 @@ class ChatService:
 
         # 3. Format context and prompt
         formatted_context = self._format_context(context_docs)
-        prompt = self._construct_prompt(messages, formatted_context, intent)
+        document_profile = self._infer_document_profile(context_docs, intent)
+        prompt = self._construct_prompt(
+            messages,
+            formatted_context,
+            intent,
+            document_profile,
+        )
         prompt = self._truncate_prompt(prompt)
 
         # 4. Generate answer
@@ -583,6 +667,7 @@ class ChatService:
             "sources": sources,
             "model": self.llm_client.text_model_id,
             "intent": intent,
+            "document_profile": document_profile,
             "degraded_mode": retrieval_error is not None,
             "collaboration_mode_applied": "balanced_answer_first",
             "no_context_reason": self._resolve_no_context_reason(
@@ -686,7 +771,13 @@ class ChatService:
 
         # 3. Format prompt
         formatted_context = self._format_context(context_docs)
-        prompt = self._construct_prompt(messages, formatted_context, intent)
+        document_profile = self._infer_document_profile(context_docs, intent)
+        prompt = self._construct_prompt(
+            messages,
+            formatted_context,
+            intent,
+            document_profile,
+        )
         prompt = self._truncate_prompt(prompt)
 
         # 4. Generate streaming answer and accumulate
@@ -735,6 +826,7 @@ class ChatService:
                 "model": self.llm_client.text_model_id,
                 "streaming": True,
                 "intent": intent,
+                "document_profile": document_profile,
                 "degraded_mode": retrieval_error is not None,
                 "collaboration_mode_applied": "balanced_answer_first",
                 "no_context_reason": self._resolve_no_context_reason(
@@ -774,6 +866,7 @@ class ChatService:
                 "data": json.dumps(
                     {
                         "intent": intent,
+                        "document_profile": document_profile,
                         "degraded_mode": retrieval_error is not None,
                         "no_context_reason": self._resolve_no_context_reason(
                             has_sources=bool(sources),
@@ -849,7 +942,13 @@ class ChatService:
             )
 
         formatted_context = self._format_context(context_docs)
-        prompt = self._construct_prompt(messages, formatted_context, intent)
+        document_profile = self._infer_document_profile(context_docs, intent)
+        prompt = self._construct_prompt(
+            messages,
+            formatted_context,
+            intent,
+            document_profile,
+        )
         prompt = self._truncate_prompt(prompt)
 
         response_text = self.llm_client.generate_text(prompt)
@@ -887,6 +986,7 @@ class ChatService:
             "sources": sources,
             "model": self.llm_client.text_model_id,
             "intent": intent,
+            "document_profile": document_profile,
             "degraded_mode": retrieval_error is not None,
             "collaboration_mode_applied": "balanced_answer_first",
             "no_context_reason": self._resolve_no_context_reason(
@@ -977,7 +1077,13 @@ class ChatService:
             )
 
         formatted_context = self._format_context(context_docs)
-        prompt = self._construct_prompt(messages, formatted_context, intent)
+        document_profile = self._infer_document_profile(context_docs, intent)
+        prompt = self._construct_prompt(
+            messages,
+            formatted_context,
+            intent,
+            document_profile,
+        )
         prompt = self._truncate_prompt(prompt)
 
         accumulated_response: list[str] = []
@@ -1024,6 +1130,7 @@ class ChatService:
                 "model": self.llm_client.text_model_id,
                 "streaming": True,
                 "intent": intent,
+                "document_profile": document_profile,
                 "degraded_mode": retrieval_error is not None,
                 "collaboration_mode_applied": "balanced_answer_first",
                 "no_context_reason": self._resolve_no_context_reason(
@@ -1062,6 +1169,7 @@ class ChatService:
                 "data": json.dumps(
                     {
                         "intent": intent,
+                        "document_profile": document_profile,
                         "degraded_mode": retrieval_error is not None,
                         "no_context_reason": self._resolve_no_context_reason(
                             has_sources=bool(sources),
@@ -1090,6 +1198,7 @@ class ChatService:
         messages: list[Message],
         context: str,
         intent: str,
+        document_profile: str,
     ) -> str:
         """Construct the prompt for the LLM with conversation history."""
         bounded_messages = messages[-self.settings.max_history_messages :]
@@ -1114,6 +1223,9 @@ class ChatService:
         intent_instruction = intent_instructions.get(
             intent,
             intent_instructions["document_lookup"],
+        )
+        document_profile_guidance = self._build_document_profile_guidance(
+            document_profile,
         )
 
         if is_legal_intent:
@@ -1169,16 +1281,25 @@ For each question, structure your response as follows:
 4. **Completeness**: Explain concepts clearly without assuming prior knowledge"""
 
         return f"""
-You are the 1CC & Techprotect personal assistant. You help employees and consultants find information across all company documentation — including legal and regulatory materials, internal procedures, operational guidelines, product documentation, and any other company resources.
+You are the 1CC & Techprotect knowledge assistant. You help employees and consultants work with multiple document classes: legal and legislation sources, internal company documentation, and employee-provided documents in any format.
 
 # SOURCE SCOPE POLICY (CRITICAL)
 
 - The primary domain is 1CC & Techprotect documentation.
 - User-uploaded documents are first-class sources and must be treated as official session documentation.
+- External references or research papers are valid supporting sources when they are part of the indexed corpus or explicitly uploaded by the user.
 - Never claim a "documentation mismatch" or criticize the corpus composition.
 - Do not say the sources are "not company documentation." Instead, answer with the available excerpts and, if needed, state that more relevant official documents are required.
 - Never start with rejection-style wording. Start with a useful answer, then optionally ask one targeted follow-up to improve precision.
 - Keep the tone formal, practical, and company-ready.
+
+# DOCUMENT PROFILE ADAPTATION (MANDATORY)
+
+- Active document profile: {document_profile}
+- Adaptation guidance: {document_profile_guidance}
+- If profile signals legal/regulatory content, follow strict legal structure and citation metadata requirements.
+- If profile signals internal company documentation, focus on operational clarity and actionable next steps.
+- If profile signals employee/general documentation, focus on understanding intent and explaining content clearly regardless of format.
 
 Intent route: {intent}
 Instruction: {intent_instruction}
