@@ -443,7 +443,8 @@ class ChatService:
         if has_sources:
             return response_text
         return (
-            "⚠️ Based on my general knowledge (not in provided sources): "
+            "I could not find enough relevant excerpts in the currently indexed documents "
+            "to provide a fully source-grounded answer. "
             f"{response_text}"
         )
 
@@ -506,31 +507,6 @@ class ChatService:
         user_query = messages[-1].content
 
         intent = self._classify_intent(user_query)
-        if intent == "out_of_domain":
-            out_of_domain_response = (
-                "I'm your 1CC & Techprotect personal assistant and I can help you find information "
-                "across all company documentation. Please ask a question related to company resources, "
-                "procedures, guidelines, or regulatory and compliance topics."
-            )
-            assistant_message_obj = DBMessage(
-                conversation_id=conversation.id,
-                role="assistant",
-                content=out_of_domain_response,
-                message_metadata={
-                    "intent": intent,
-                    "degraded_mode": False,
-                    "sources": [],
-                },
-            )
-            self.db.add(assistant_message_obj)
-            self.db.commit()
-            self.db.refresh(assistant_message_obj)
-            return (
-                out_of_domain_response,
-                conversation.id,
-                assistant_message_obj.id,
-                {"intent": intent, "degraded_mode": False, "sources": []},
-            )
 
         retrieval_error = None
         context_docs: list[dict[str, Any]] = []
@@ -663,19 +639,6 @@ class ChatService:
         user_query = messages[-1].content
 
         intent = self._classify_intent(user_query)
-        if intent == "out_of_domain":
-
-            def out_of_domain_stream() -> Iterator[dict[str, str]]:
-                yield {
-                    "event": "data",
-                    "data": (
-                        "I'm your 1CC & Techprotect personal assistant and I can help you find information "
-                        "across all company documentation. Please ask a question related to company resources, "
-                        "procedures, guidelines, or regulatory and compliance topics."
-                    ),
-                }
-
-            return out_of_domain_stream(), conversation.id
 
         retrieval_error = None
         context_docs: list[dict[str, Any]] = []
@@ -1091,7 +1054,7 @@ class ChatService:
             "follow_up_clarification": "Resolve ambiguity from prior turns and explicitly state assumptions.",
             "procedural_guidance": "Provide step-by-step compliance actions and clearly name responsible actors.",
             "document_lookup": "Provide a clear, informative answer based on the company documentation sources.",
-            "out_of_domain": "Decline and redirect to company documentation topics.",
+            "out_of_domain": "Attempt to answer from indexed sources first, including user-uploaded documents; if evidence is missing, request the relevant file.",
         }
         intent_instruction = intent_instructions.get(
             intent,
@@ -1125,7 +1088,7 @@ Every legal reference MUST include a metadata block in this format:
 # ACCURACY & PRECISION STANDARDS
 
 1. **Source-Based Answers**: Base ALL legal interpretations exclusively on the provided sources below
-2. **Knowledge Gaps**: If sources are insufficient, clearly state: "⚠️ Based on my general knowledge (not in provided sources): [answer]"
+2. **Knowledge Gaps**: If sources are insufficient, explicitly say that currently indexed documents are insufficient and request the relevant official file or upload
 3. **Chronological Accuracy**:
    - Always verify if legislation is current or superseded
    - Explicitly note when laws have been repealed or amended
@@ -1146,12 +1109,20 @@ For each question, structure your response as follows:
 # ACCURACY & PRECISION STANDARDS
 
 1. **Source-Based Answers**: Base ALL answers exclusively on the provided documentation sources below
-2. **Knowledge Gaps**: If sources are insufficient, clearly state: "⚠️ Based on my general knowledge (not in provided sources): [answer]"
+        2. **Knowledge Gaps**: If sources are insufficient, explicitly say that currently indexed documents are insufficient and request the relevant official file or upload
 3. **Internal Consistency**: Never contradict yourself within a response
 4. **Completeness**: Explain concepts clearly without assuming prior knowledge"""
 
         return f"""
 You are the 1CC & Techprotect personal assistant. You help employees and consultants find information across all company documentation — including legal and regulatory materials, internal procedures, operational guidelines, product documentation, and any other company resources.
+
+        # SOURCE SCOPE POLICY (CRITICAL)
+
+        - The primary domain is 1CC & Techprotect documentation.
+        - User-uploaded documents are first-class sources and must be treated as official session documentation.
+        - Never claim a "documentation mismatch" or criticize the corpus composition.
+        - Do not say the sources are "not company documentation." Instead, answer with the available excerpts and, if needed, state that more relevant official documents are required.
+        - Keep the tone formal, practical, and company-ready.
 
 Intent route: {intent}
 Instruction: {intent_instruction}
