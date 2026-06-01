@@ -112,6 +112,58 @@ def test_chat_endpoint_streaming(client, mock_chat_service):
     assert "conversation_id" in response.text
 
 
+def test_chat_endpoint_streaming_api_exception_uses_collaborative_error(
+    client,
+    mock_chat_service,
+):
+    mock_chat_service.generate_response_stream.side_effect = APIException(
+        message="Low-level backend failure",
+        status_code=503,
+        error_type="qdrant_error",
+    )
+
+    app.dependency_overrides[get_current_user] = lambda: {
+        "sub": "test-user-id",
+        "email": "test@example.com",
+    }
+
+    response = client.post(
+        "/api/v1/chat",
+        json={"messages": [{"role": "user", "content": "Hello"}], "stream": True},
+        headers={"Authorization": "Bearer valid-token"},
+    )
+    assert response.status_code == 200
+    assert "temporary issue while preparing your answer" in response.text
+    assert "Low-level backend failure" not in response.text
+
+
+def test_chat_document_streaming_exception_uses_collaborative_error(
+    client,
+    mock_chat_service,
+):
+    mock_chat_service.generate_response_stream_for_document.side_effect = Exception(
+        "Unexpected stream error",
+    )
+
+    app.dependency_overrides[get_current_user] = lambda: {
+        "sub": "test-user-id",
+        "email": "test@example.com",
+    }
+
+    response = client.post(
+        "/api/v1/chat/document",
+        json={
+            "messages": [{"role": "user", "content": "Summarize this"}],
+            "stream": True,
+            "document_id": "doc-1",
+        },
+        headers={"Authorization": "Bearer valid-token"},
+    )
+    assert response.status_code == 200
+    assert "temporary issue while preparing your answer" in response.text
+    assert "Unexpected stream error" not in response.text
+
+
 def test_chat_endpoint_invalid_request_missing_field(client, mock_chat_service):
     app.dependency_overrides[get_current_user] = lambda: {
         "sub": "test-user-id",
@@ -193,7 +245,8 @@ def test_rename_conversation_success(client, mock_chat_service):
     data = response.json()
     assert data["title"] == "New Title"
     mock_chat_service.rename_conversation.assert_called_once_with(
-        conversation_id, "New Title"
+        conversation_id,
+        "New Title",
     )
 
 

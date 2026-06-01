@@ -30,6 +30,13 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _collaborative_stream_error_message() -> str:
+    return (
+        "I hit a temporary issue while preparing your answer. "
+        "Please try again, and if possible include the document title or a short excerpt so I can help more precisely."
+    )
+
+
 @lru_cache
 def get_llm_client_singleton() -> BedrockClient:
     settings = get_settings()
@@ -115,10 +122,16 @@ async def chat_endpoint(
 
                 except APIException as e:
                     logger.error("APIException during streaming: %s", e.message)
-                    yield {"event": "error", "data": e.message}
+                    yield {
+                        "event": "error",
+                        "data": _collaborative_stream_error_message(),
+                    }
                 except Exception as e:
                     logger.error("Unexpected error during streaming: %s", e)
-                    yield {"event": "error", "data": "Internal server error"}
+                    yield {
+                        "event": "error",
+                        "data": _collaborative_stream_error_message(),
+                    }
 
             return EventSourceResponse(event_generator())
 
@@ -190,10 +203,16 @@ async def chat_document_endpoint(
                         yield event
                 except APIException as e:
                     logger.error("APIException during streaming: %s", e.message)
-                    yield {"event": "error", "data": e.message}
+                    yield {
+                        "event": "error",
+                        "data": _collaborative_stream_error_message(),
+                    }
                 except Exception as e:
                     logger.error("Unexpected error during streaming: %s", e)
-                    yield {"event": "error", "data": "Internal server error"}
+                    yield {
+                        "event": "error",
+                        "data": _collaborative_stream_error_message(),
+                    }
 
             return EventSourceResponse(event_generator())
 

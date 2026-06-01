@@ -432,7 +432,10 @@ class ChatService:
     def _validate_output(self, text: str) -> str:
         cleaned = text.strip()
         if not cleaned:
-            return "I could not generate a safe answer right now. Please retry in a few moments."
+            return (
+                "Here is the best guidance I can provide right now based on the available context. "
+                "If you share the exact document title or a short excerpt, I can refine this further."
+            )
         return cleaned
 
     def _append_uncertainty_if_needed(
@@ -443,10 +446,23 @@ class ChatService:
         if has_sources:
             return response_text
         return (
-            "I could not find enough relevant excerpts in the currently indexed documents "
-            "to provide a fully source-grounded answer. "
-            f"{response_text}"
+            f"{response_text}\n\n"
+            "To improve precision, share the exact document title, section, or a short excerpt and I will refine the answer."
         )
+
+    def _resolve_no_context_reason(
+        self,
+        has_sources: bool,
+        retrieval_error: Exception | None,
+        pinned_document: bool = False,
+    ) -> str | None:
+        if has_sources:
+            return None
+        if retrieval_error is not None:
+            return "retrieval_degraded"
+        if pinned_document:
+            return "pinned_filter_no_hits"
+        return "no_relevant_hits"
 
     def _truncate_prompt(self, prompt: str) -> str:
         if len(prompt) <= self.settings.max_prompt_characters:
@@ -568,6 +584,11 @@ class ChatService:
             "model": self.llm_client.text_model_id,
             "intent": intent,
             "degraded_mode": retrieval_error is not None,
+            "collaboration_mode_applied": "balanced_answer_first",
+            "no_context_reason": self._resolve_no_context_reason(
+                has_sources=bool(sources),
+                retrieval_error=retrieval_error,
+            ),
             "retrieval": retrieval_diagnostics,
             "memory": {
                 "session_memory_messages": min(
@@ -715,6 +736,11 @@ class ChatService:
                 "streaming": True,
                 "intent": intent,
                 "degraded_mode": retrieval_error is not None,
+                "collaboration_mode_applied": "balanced_answer_first",
+                "no_context_reason": self._resolve_no_context_reason(
+                    has_sources=bool(sources),
+                    retrieval_error=retrieval_error,
+                ),
                 "retrieval": retrieval_diagnostics,
                 "memory": {
                     "session_memory_messages": min(
@@ -749,6 +775,10 @@ class ChatService:
                     {
                         "intent": intent,
                         "degraded_mode": retrieval_error is not None,
+                        "no_context_reason": self._resolve_no_context_reason(
+                            has_sources=bool(sources),
+                            retrieval_error=retrieval_error,
+                        ),
                         "sources": sources,
                     },
                 ),
@@ -858,6 +888,12 @@ class ChatService:
             "model": self.llm_client.text_model_id,
             "intent": intent,
             "degraded_mode": retrieval_error is not None,
+            "collaboration_mode_applied": "balanced_answer_first",
+            "no_context_reason": self._resolve_no_context_reason(
+                has_sources=bool(sources),
+                retrieval_error=retrieval_error,
+                pinned_document=True,
+            ),
             "retrieval": retrieval_diagnostics,
             "memory": {
                 "session_memory_messages": min(
@@ -989,6 +1025,12 @@ class ChatService:
                 "streaming": True,
                 "intent": intent,
                 "degraded_mode": retrieval_error is not None,
+                "collaboration_mode_applied": "balanced_answer_first",
+                "no_context_reason": self._resolve_no_context_reason(
+                    has_sources=bool(sources),
+                    retrieval_error=retrieval_error,
+                    pinned_document=True,
+                ),
                 "retrieval": retrieval_diagnostics,
                 "memory": {
                     "session_memory_messages": min(
@@ -1021,6 +1063,11 @@ class ChatService:
                     {
                         "intent": intent,
                         "degraded_mode": retrieval_error is not None,
+                        "no_context_reason": self._resolve_no_context_reason(
+                            has_sources=bool(sources),
+                            retrieval_error=retrieval_error,
+                            pinned_document=True,
+                        ),
                         "sources": sources,
                     },
                 ),
@@ -1062,7 +1109,7 @@ class ChatService:
             "follow_up_clarification": "Resolve ambiguity from prior turns and explicitly state assumptions.",
             "procedural_guidance": "Provide step-by-step compliance actions and clearly name responsible actors.",
             "document_lookup": "Provide a clear, informative answer based on the company documentation sources.",
-            "out_of_domain": "Attempt to answer from indexed sources first, including user-uploaded documents; if evidence is missing, request the relevant file.",
+            "out_of_domain": "Answer with the best available guidance from indexed sources first, including user-uploaded documents, and then ask one focused follow-up only if it improves precision.",
         }
         intent_instruction = intent_instructions.get(
             intent,
@@ -1096,7 +1143,7 @@ Every legal reference MUST include a metadata block in this format:
 # ACCURACY & PRECISION STANDARDS
 
 1. **Source-Based Answers**: Base ALL legal interpretations exclusively on the provided sources below
-2. **Knowledge Gaps**: If sources are insufficient, explicitly say that currently indexed documents are insufficient and request the relevant official file or upload
+2. **Answer-First Collaboration**: Always provide the best available answer first. If precision is limited, ask one specific follow-up request to refine the answer.
 3. **Chronological Accuracy**:
    - Always verify if legislation is current or superseded
    - Explicitly note when laws have been repealed or amended
@@ -1117,7 +1164,7 @@ For each question, structure your response as follows:
 # ACCURACY & PRECISION STANDARDS
 
 1. **Source-Based Answers**: Base ALL answers exclusively on the provided documentation sources below
-2. **Knowledge Gaps**: If sources are insufficient, explicitly say that currently indexed documents are insufficient and request the relevant official file or upload
+2. **Answer-First Collaboration**: Always provide the best available answer first. If precision is limited, ask one specific follow-up request to refine the answer.
 3. **Internal Consistency**: Never contradict yourself within a response
 4. **Completeness**: Explain concepts clearly without assuming prior knowledge"""
 
@@ -1130,6 +1177,7 @@ You are the 1CC & Techprotect personal assistant. You help employees and consult
 - User-uploaded documents are first-class sources and must be treated as official session documentation.
 - Never claim a "documentation mismatch" or criticize the corpus composition.
 - Do not say the sources are "not company documentation." Instead, answer with the available excerpts and, if needed, state that more relevant official documents are required.
+- Never start with rejection-style wording. Start with a useful answer, then optionally ask one targeted follow-up to improve precision.
 - Keep the tone formal, practical, and company-ready.
 
 Intent route: {intent}
