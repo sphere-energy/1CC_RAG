@@ -545,6 +545,8 @@ class ChatService:
                 "document_id": doc.get("document_id"),
                 "score": doc.get("score"),
                 "chunk_id": doc.get("chunk_id"),
+                "source_kind": doc.get("source_kind"),
+                "source_origin": doc.get("source_origin"),
             }
             for doc in context_docs[:5]
         ]
@@ -675,6 +677,8 @@ class ChatService:
                 "document_id": doc.get("document_id"),
                 "score": doc.get("score"),
                 "chunk_id": doc.get("chunk_id"),
+                "source_kind": doc.get("source_kind"),
+                "source_origin": doc.get("source_origin"),
             }
             for doc in context_docs[:5]
         ]
@@ -831,6 +835,8 @@ class ChatService:
                 "document_id": doc.get("document_id"),
                 "score": doc.get("score"),
                 "chunk_id": doc.get("chunk_id"),
+                "source_kind": doc.get("source_kind"),
+                "source_origin": doc.get("source_origin"),
             }
             for doc in context_docs[:5]
         ]
@@ -946,6 +952,8 @@ class ChatService:
                 "document_id": doc.get("document_id"),
                 "score": doc.get("score"),
                 "chunk_id": doc.get("chunk_id"),
+                "source_kind": doc.get("source_kind"),
+                "source_origin": doc.get("source_origin"),
             }
             for doc in context_docs[:5]
         ]
@@ -1109,20 +1117,20 @@ For each question, structure your response as follows:
 # ACCURACY & PRECISION STANDARDS
 
 1. **Source-Based Answers**: Base ALL answers exclusively on the provided documentation sources below
-        2. **Knowledge Gaps**: If sources are insufficient, explicitly say that currently indexed documents are insufficient and request the relevant official file or upload
+2. **Knowledge Gaps**: If sources are insufficient, explicitly say that currently indexed documents are insufficient and request the relevant official file or upload
 3. **Internal Consistency**: Never contradict yourself within a response
 4. **Completeness**: Explain concepts clearly without assuming prior knowledge"""
 
         return f"""
 You are the 1CC & Techprotect personal assistant. You help employees and consultants find information across all company documentation — including legal and regulatory materials, internal procedures, operational guidelines, product documentation, and any other company resources.
 
-        # SOURCE SCOPE POLICY (CRITICAL)
+# SOURCE SCOPE POLICY (CRITICAL)
 
-        - The primary domain is 1CC & Techprotect documentation.
-        - User-uploaded documents are first-class sources and must be treated as official session documentation.
-        - Never claim a "documentation mismatch" or criticize the corpus composition.
-        - Do not say the sources are "not company documentation." Instead, answer with the available excerpts and, if needed, state that more relevant official documents are required.
-        - Keep the tone formal, practical, and company-ready.
+- The primary domain is 1CC & Techprotect documentation.
+- User-uploaded documents are first-class sources and must be treated as official session documentation.
+- Never claim a "documentation mismatch" or criticize the corpus composition.
+- Do not say the sources are "not company documentation." Instead, answer with the available excerpts and, if needed, state that more relevant official documents are required.
+- Keep the tone formal, practical, and company-ready.
 
 Intent route: {intent}
 Instruction: {intent_instruction}

@@ -130,6 +130,12 @@ class QdrantRetriever:
                             "publication_date": p.payload.get("publication_date"),
                             "chunk_level": p.payload.get("chunk_level"),
                             "chunk_id": p.payload.get("chunk_id"),
+                            "source_kind": self._classify_source_kind(p.payload),
+                            "source_origin": p.payload.get("source_origin")
+                            or p.payload.get("document_origin")
+                            or p.payload.get("origin")
+                            or p.payload.get("source_type")
+                            or p.payload.get("source"),
                             "score": score,
                         },
                     )
@@ -138,6 +144,17 @@ class QdrantRetriever:
             diagnostics = {
                 "retrieved_k": len(reranked),
                 "rerank_scores": [doc["score"] for doc in reranked[:5]],
+                "source_priority": {
+                    "company_docs": sum(
+                        1 for doc in reranked if doc.get("source_kind") == "company"
+                    ),
+                    "user_docs": sum(
+                        1 for doc in reranked if doc.get("source_kind") == "user"
+                    ),
+                    "unknown": sum(
+                        1 for doc in reranked if doc.get("source_kind") == "unknown"
+                    ),
+                },
             }
             logger.info("Retrieved %d documents", len(results))
             return reranked, diagnostics
@@ -276,7 +293,12 @@ class QdrantRetriever:
         for doc in docs:
             text = (doc.get("text") or "").lower()
             lexical_hits = sum(1 for term in query_terms if term in text)
-            hybrid_score = float(doc.get("score", 0.0)) + (0.03 * lexical_hits)
+            source_boost = self._source_priority_boost(
+                str(doc.get("source_kind") or "")
+            )
+            hybrid_score = (
+                float(doc.get("score", 0.0)) + (0.03 * lexical_hits) + source_boost
+            )
             updated = dict(doc)
             updated["score"] = round(hybrid_score, 6)
             reranked.append(updated)
@@ -360,6 +382,12 @@ class QdrantRetriever:
                         "publication_date": record.payload.get("publication_date"),
                         "chunk_level": record.payload.get("chunk_level"),
                         "chunk_id": record.payload.get("chunk_id"),
+                        "source_kind": self._classify_source_kind(record.payload),
+                        "source_origin": record.payload.get("source_origin")
+                        or record.payload.get("document_origin")
+                        or record.payload.get("origin")
+                        or record.payload.get("source_type")
+                        or record.payload.get("source"),
                         "score": 1.0,  # No similarity score — full document pinned
                     },
                 )
@@ -374,6 +402,17 @@ class QdrantRetriever:
             "pinned_document": True,
             "pinned_document_id": document_id,
             "pinned_title": title,
+            "source_priority": {
+                "company_docs": sum(
+                    1 for doc in results if doc.get("source_kind") == "company"
+                ),
+                "user_docs": sum(
+                    1 for doc in results if doc.get("source_kind") == "user"
+                ),
+                "unknown": sum(
+                    1 for doc in results if doc.get("source_kind") == "unknown"
+                ),
+            },
         }
         logger.info(
             "Retrieved %d chunks for document (id=%s, title=%s)",
@@ -382,6 +421,51 @@ class QdrantRetriever:
             title,
         )
         return results, diagnostics
+
+    def _classify_source_kind(self, payload: dict[str, Any]) -> str:
+        """Classify source into company, user, or unknown using metadata first."""
+        raw_fields = [
+            payload.get("source_origin"),
+            payload.get("document_origin"),
+            payload.get("origin"),
+            payload.get("source_type"),
+            payload.get("source"),
+            payload.get("visibility"),
+            payload.get("owner_type"),
+            payload.get("doc_scope"),
+            payload.get("scope"),
+        ]
+        haystack = " ".join(str(value).lower() for value in raw_fields if value)
+
+        if any(
+            token in haystack
+            for token in ["company", "official", "1cc", "techprotect", "internal"]
+        ):
+            return "company"
+        if any(
+            token in haystack
+            for token in ["user", "uploaded", "personal", "private", "tenant"]
+        ):
+            return "user"
+
+        label_text = " ".join(
+            [
+                str(payload.get("document_id") or "").lower(),
+                str(payload.get("title") or "").lower(),
+            ],
+        )
+        if "1cc" in label_text or "techprotect" in label_text:
+            return "company"
+
+        return "unknown"
+
+    def _source_priority_boost(self, source_kind: str) -> float:
+        """Deterministic source boost: company > user > unknown."""
+        if source_kind == "company":
+            return 0.06
+        if source_kind == "user":
+            return 0.03
+        return 0.0
 
     def _with_retries(self, func, *args, **kwargs):
         attempts = self.settings.qdrant_retries
