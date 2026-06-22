@@ -113,7 +113,9 @@ class DocumentIngestService:
             for idx, (micro_text, micro_id) in enumerate(micro_pairs):
                 micro_vec = self.llm_client.generate_embedding(micro_text)
                 prev_id = micro_pairs[idx - 1][1] if idx > 0 else None
-                next_id = micro_pairs[idx + 1][1] if idx < len(micro_pairs) - 1 else None
+                next_id = (
+                    micro_pairs[idx + 1][1] if idx < len(micro_pairs) - 1 else None
+                )
 
                 points.append(
                     PointStruct(
@@ -214,10 +216,10 @@ class DocumentIngestService:
             if not macro_text.strip():
                 continue
             macro_id = str(uuid.uuid4())
-            raw_micros = self._split_text(macro_text, MICRO_TARGET_CHARS, MICRO_OVERLAP_CHARS)
-            micro_pairs = [
-                (mt, str(uuid.uuid4())) for mt in raw_micros if mt.strip()
-            ]
+            raw_micros = self._split_text(
+                macro_text, MICRO_TARGET_CHARS, MICRO_OVERLAP_CHARS
+            )
+            micro_pairs = [(mt, str(uuid.uuid4())) for mt in raw_micros if mt.strip()]
             macro_groups.append((macro_text, macro_id, micro_pairs))
 
         return macro_groups

@@ -80,11 +80,17 @@ class ConversationListResponse(BaseModel):
 
 
 class DocumentIngestRequest(BaseModel):
-    legislation_id: UUID = Field(..., description="UUID of the legislation record in KMS")
+    legislation_id: UUID = Field(
+        ..., description="UUID of the legislation record in KMS"
+    )
     document_id: UUID = Field(..., description="UUID of the document metadata record")
-    file_url: str = Field(..., description="Presigned or public URL to download the PDF")
+    file_url: str = Field(
+        ..., description="Presigned or public URL to download the PDF"
+    )
     title: str = Field(..., description="Human-readable title of the document")
-    publication_date: str | None = Field(None, description="ISO date string, e.g. '2024-01-15'")
+    publication_date: str | None = Field(
+        None, description="ISO date string, e.g. '2024-01-15'"
+    )
 
 
 class IngestResponse(BaseModel):

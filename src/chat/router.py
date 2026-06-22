@@ -411,6 +411,7 @@ async def rename_conversation(
     except APIException as e:
         raise HTTPException(status_code=e.status_code, detail=e.message)
 
+
 def _verify_internal_key(
     x_internal_api_key: str | None = Header(default=None, alias="X-Internal-API-Key"),
     settings: Settings = Depends(get_settings),
@@ -428,7 +429,9 @@ def _verify_internal_key(
         )
         return
     if not x_internal_api_key or x_internal_api_key != expected:
-        raise HTTPException(status_code=401, detail="Invalid or missing internal API key")
+        raise HTTPException(
+            status_code=401, detail="Invalid or missing internal API key"
+        )
 
 
 @lru_cache

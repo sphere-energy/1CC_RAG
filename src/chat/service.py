@@ -984,7 +984,12 @@ class ChatService:
             conversation.updated_at = datetime.utcnow()
             self.db.commit()
             self.db.refresh(assistant_message_obj)
-            return response_text, conversation.id, assistant_message_obj.id, not_indexed_metadata
+            return (
+                response_text,
+                conversation.id,
+                assistant_message_obj.id,
+                not_indexed_metadata,
+            )
 
         formatted_context = self._format_context(context_docs)
         document_profile = self._infer_document_profile(context_docs, intent)
