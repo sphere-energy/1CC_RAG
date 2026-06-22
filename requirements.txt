@@ -4,6 +4,7 @@ gunicorn
 pydantic
 pydantic-settings
 python-dotenv
+pypdf
 black
 mypy
 pytest

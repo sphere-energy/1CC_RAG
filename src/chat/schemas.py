@@ -79,6 +79,21 @@ class ConversationListResponse(BaseModel):
     total: int
 
 
+class DocumentIngestRequest(BaseModel):
+    legislation_id: UUID = Field(..., description="UUID of the legislation record in KMS")
+    document_id: UUID = Field(..., description="UUID of the document metadata record")
+    file_url: str = Field(..., description="Presigned or public URL to download the PDF")
+    title: str = Field(..., description="Human-readable title of the document")
+    publication_date: str | None = Field(None, description="ISO date string, e.g. '2024-01-15'")
+
+
+class IngestResponse(BaseModel):
+    status: str = Field(..., description="'accepted' when the job was queued")
+    message: str
+    legislation_id: UUID
+    document_id: UUID
+
+
 class DocumentChatRequest(BaseModel):
     conversation_id: UUID | None = Field(
         None,

@@ -438,6 +438,20 @@ class ChatService:
             )
         return cleaned
 
+    @staticmethod
+    def _not_indexed_message() -> str:
+        """Human-friendly message when a pinned document has no Qdrant chunks."""
+        return (
+            "This document has **not been indexed** into the knowledge base yet, "
+            "so I cannot answer questions about its content.\n\n"
+            "**To enable document chat:**\n"
+            "1. Open the document in the Library\n"
+            "2. Click **Edit** and re-save it with **Include in Vector DB** enabled, "
+            "or ask an administrator to re-trigger indexing\n\n"
+            "If the document was uploaded recently, indexing may still be in progress — "
+            "check the indexing status badge on the library card and try again in a moment."
+        )
+
     def _append_uncertainty_if_needed(
         self,
         response_text: str,
@@ -941,6 +955,37 @@ class ChatService:
                 conversation.id,
             )
 
+        if not context_docs and retrieval_error is None:
+            logger.warning(
+                "Pinned-document: no Qdrant chunks found (document_id=%s title=%s) — "
+                "returning not-indexed message without calling LLM",
+                document_id,
+                title,
+            )
+            response_text = self._not_indexed_message()
+            not_indexed_metadata: dict[str, Any] = {
+                "sources": [],
+                "model": self.llm_client.text_model_id,
+                "intent": "not_indexed",
+                "document_profile": "unknown",
+                "degraded_mode": False,
+                "no_context_reason": "pinned_filter_no_hits",
+                "retrieval": retrieval_diagnostics,
+            }
+            assistant_message_obj = DBMessage(
+                conversation_id=conversation.id,
+                role="assistant",
+                content=response_text,
+                message_metadata=not_indexed_metadata,
+            )
+            self.db.add(assistant_message_obj)
+            if not conversation.title and len(messages) == 1:
+                conversation.title = user_query[:100]
+            conversation.updated_at = datetime.utcnow()
+            self.db.commit()
+            self.db.refresh(assistant_message_obj)
+            return response_text, conversation.id, assistant_message_obj.id, not_indexed_metadata
+
         formatted_context = self._format_context(context_docs)
         document_profile = self._infer_document_profile(context_docs, intent)
         prompt = self._construct_prompt(
@@ -1075,6 +1120,53 @@ class ChatService:
                 "Pinned-document retrieval degraded for streaming conversation %s",
                 conversation.id,
             )
+
+        if not context_docs and retrieval_error is None:
+            logger.warning(
+                "Streaming pinned-document: no Qdrant chunks (document_id=%s title=%s) — "
+                "returning not-indexed message without calling LLM",
+                document_id,
+                title,
+            )
+            not_indexed_msg = self._not_indexed_message()
+            not_indexed_meta: dict[str, Any] = {
+                "sources": [],
+                "model": self.llm_client.text_model_id,
+                "intent": "not_indexed",
+                "document_profile": "unknown",
+                "degraded_mode": False,
+                "no_context_reason": "pinned_filter_no_hits",
+                "retrieval": retrieval_diagnostics,
+            }
+
+            def _not_indexed_stream() -> Iterator[dict[str, str]]:
+                yield {"event": "progress", "data": "retrieval_complete"}
+                yield {"event": "data", "data": not_indexed_msg}
+                assistant_message_obj = DBMessage(
+                    conversation_id=conversation.id,
+                    role="assistant",
+                    content=not_indexed_msg,
+                    message_metadata=not_indexed_meta,
+                )
+                self.db.add(assistant_message_obj)
+                if not conversation.title and len(messages) == 1:
+                    conversation.title = user_query[:100]
+                conversation.updated_at = datetime.utcnow()
+                self.db.commit()
+                yield {
+                    "event": "metadata",
+                    "data": json.dumps(
+                        {
+                            "intent": "not_indexed",
+                            "document_profile": "unknown",
+                            "degraded_mode": False,
+                            "no_context_reason": "pinned_filter_no_hits",
+                            "sources": [],
+                        }
+                    ),
+                }
+
+            return _not_indexed_stream(), conversation.id
 
         formatted_context = self._format_context(context_docs)
         document_profile = self._infer_document_profile(context_docs, intent)
