@@ -56,12 +56,16 @@ class BedrockClient:
                 detail={"error": str(e)},
             )
 
-    def generate_embedding(self, text: str) -> list[float]:
+    def generate_embedding(
+        self, text: str, input_type: str = "search_document"
+    ) -> list[float]:
         """
         Generate text embedding using the Cohere Embed model with circuit breaker protection.
 
         Args:
             text (str): The text to embed.
+            input_type (str): Cohere input type. Use "search_document" when indexing
+                and "search_query" when embedding a user question.
 
         Returns:
             List[float]: The generated embedding vector.
@@ -70,7 +74,7 @@ class BedrockClient:
             BedrockException: If the Bedrock call fails or circuit is open.
         """
         try:
-            return self.breaker.call(self._generate_embedding_impl, text)
+            return self.breaker.call(self._generate_embedding_impl, text, input_type)
         except CircuitBreakerError as e:
             logger.error("Circuit breaker open for Bedrock: %s", e)
             raise BedrockException(
@@ -78,14 +82,16 @@ class BedrockClient:
                 detail={"circuit_breaker": "open"},
             )
 
-    def _generate_embedding_impl(self, text: str) -> list[float]:
+    def _generate_embedding_impl(
+        self, text: str, input_type: str = "search_document"
+    ) -> list[float]:
         """Internal implementation of embedding generation."""
         logger.info("Generating embedding for text: %s...", text[:50])
 
         body = json.dumps(
             {
                 "texts": [text],
-                "input_type": "search_document",
+                "input_type": input_type,
                 "embedding_types": ["float"],
             },
         )

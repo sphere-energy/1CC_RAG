@@ -36,6 +36,7 @@ class QdrantRetriever:
                 host=settings.qdrant_host,
                 port=settings.qdrant_port,
                 timeout=settings.qdrant_timeout_seconds,
+                check_compatibility=False,
             )
             self.collection_name = settings.qdrant_collection_name
             self.breaker = get_qdrant_breaker()
@@ -113,7 +114,7 @@ class QdrantRetriever:
             # Sort by score
             sorted_points = sorted(
                 expanded_points,
-                key=lambda p: p.score if p.score else 0.0,
+                key=lambda p: getattr(p, "score", 0.0) or 0.0,
                 reverse=True,
             )
 
@@ -121,7 +122,7 @@ class QdrantRetriever:
             results = []
             for p in sorted_points[:10]:  # Limit to top 10 unique results
                 if p.payload:
-                    score = p.score if p.score else 0.0
+                    score = getattr(p, "score", 0.0) or 0.0
                     results.append(
                         {
                             "text": p.payload.get("text", ""),
@@ -460,11 +461,9 @@ class QdrantRetriever:
         return "unknown"
 
     def _source_priority_boost(self, source_kind: str) -> float:
-        """Deterministic source boost: company > user > unknown."""
-        if source_kind == "company":
+        """Deterministic source boost: company and user docs ranked equally above unknown."""
+        if source_kind in ("company", "user"):
             return 0.06
-        if source_kind == "user":
-            return 0.03
         return 0.0
 
     def _with_retries(self, func, *args, **kwargs):

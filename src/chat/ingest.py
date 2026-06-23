@@ -45,6 +45,7 @@ class DocumentIngestService:
             host=settings.qdrant_host,
             port=settings.qdrant_port,
             timeout=settings.qdrant_timeout_seconds,
+            check_compatibility=False,
         )
         self.collection_name = settings.qdrant_collection_name
 

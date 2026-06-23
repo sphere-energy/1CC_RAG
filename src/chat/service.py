@@ -452,6 +452,30 @@ class ChatService:
             "check the indexing status badge on the library card and try again in a moment."
         )
 
+    @staticmethod
+    def _no_results_message() -> str:
+        """Human-friendly message when general similarity search returns no matching chunks."""
+        return (
+            "I searched the knowledge base but could not find any documents relevant "
+            "to your question.\n\n"
+            "**Suggestions:**\n"
+            "- Rephrase your question using more specific terms from the document\n"
+            "- Make sure the document has been indexed "
+            "(check the status badge in the Library)\n"
+            "- If you know the exact document, open it in the Library and use "
+            "**Create Chat** to focus the conversation on that document"
+        )
+
+    @staticmethod
+    def _retrieval_error_message() -> str:
+        """Human-friendly message when Qdrant is unreachable or returns an error."""
+        return (
+            "I'm temporarily unable to search the knowledge base due to a connectivity "
+            "issue. Please try again in a moment.\n\n"
+            "If the problem persists, check that the vector database service is running "
+            "and that the document has been indexed (check the status badge in the Library)."
+        )
+
     def _append_uncertainty_if_needed(
         self,
         response_text: str,
@@ -625,7 +649,9 @@ class ChatService:
         }
 
         try:
-            query_embedding = self.llm_client.generate_embedding(user_query)
+            query_embedding = self.llm_client.generate_embedding(
+                user_query, input_type="search_query"
+            )
             context_docs, retrieval_diagnostics = self.retriever.retrieve(
                 query_embedding,
                 user_query=user_query,
@@ -633,6 +659,51 @@ class ChatService:
         except QdrantException as exc:
             retrieval_error = exc
             logger.warning("Retrieval degraded for conversation %s", conversation.id)
+
+        if not context_docs:
+            if retrieval_error is not None:
+                logger.warning(
+                    "General chat: Qdrant error with no fallback results — "
+                    "short-circuiting LLM call for conversation %s",
+                    conversation.id,
+                )
+                response_text = self._retrieval_error_message()
+                no_context_reason = "retrieval_error"
+            else:
+                logger.info(
+                    "General chat: similarity search returned no results — "
+                    "short-circuiting LLM call for conversation %s",
+                    conversation.id,
+                )
+                response_text = self._no_results_message()
+                no_context_reason = "similarity_search_no_hits"
+            no_results_metadata: dict[str, Any] = {
+                "sources": [],
+                "model": self.llm_client.text_model_id,
+                "intent": intent,
+                "document_profile": "unknown",
+                "degraded_mode": retrieval_error is not None,
+                "no_context_reason": no_context_reason,
+                "retrieval": retrieval_diagnostics,
+            }
+            assistant_message_obj = DBMessage(
+                conversation_id=conversation.id,
+                role="assistant",
+                content=response_text,
+                message_metadata=no_results_metadata,
+            )
+            self.db.add(assistant_message_obj)
+            if not conversation.title and len(messages) == 1:
+                conversation.title = user_query[:100]
+            conversation.updated_at = datetime.utcnow()
+            self.db.commit()
+            self.db.refresh(assistant_message_obj)
+            return (
+                response_text,
+                conversation.id,
+                assistant_message_obj.id,
+                no_results_metadata,
+            )
 
         # 3. Format context and prompt
         formatted_context = self._format_context(context_docs)
@@ -771,7 +842,9 @@ class ChatService:
         }
 
         try:
-            query_embedding = self.llm_client.generate_embedding(user_query)
+            query_embedding = self.llm_client.generate_embedding(
+                user_query, input_type="search_query"
+            )
             context_docs, retrieval_diagnostics = self.retriever.retrieve(
                 query_embedding,
                 user_query=user_query,
@@ -782,6 +855,62 @@ class ChatService:
                 "Retrieval degraded for streaming conversation %s",
                 conversation.id,
             )
+
+        if not context_docs:
+            if retrieval_error is not None:
+                logger.warning(
+                    "General chat (stream): Qdrant error with no fallback results — "
+                    "short-circuiting LLM call for conversation %s",
+                    conversation.id,
+                )
+                no_results_msg = self._retrieval_error_message()
+                no_context_reason_val = "retrieval_error"
+            else:
+                logger.info(
+                    "General chat (stream): similarity search returned no results — "
+                    "short-circuiting LLM call for conversation %s",
+                    conversation.id,
+                )
+                no_results_msg = self._no_results_message()
+                no_context_reason_val = "similarity_search_no_hits"
+            no_results_meta: dict[str, Any] = {
+                "sources": [],
+                "model": self.llm_client.text_model_id,
+                "intent": intent,
+                "document_profile": "unknown",
+                "degraded_mode": retrieval_error is not None,
+                "no_context_reason": no_context_reason_val,
+                "retrieval": retrieval_diagnostics,
+            }
+
+            def _no_results_stream() -> Iterator[dict[str, str]]:
+                yield {"event": "progress", "data": "retrieval_complete"}
+                yield {"event": "data", "data": no_results_msg}
+                assistant_message_obj = DBMessage(
+                    conversation_id=conversation.id,
+                    role="assistant",
+                    content=no_results_msg,
+                    message_metadata=no_results_meta,
+                )
+                self.db.add(assistant_message_obj)
+                if not conversation.title and len(messages) == 1:
+                    conversation.title = user_query[:100]
+                conversation.updated_at = datetime.utcnow()
+                self.db.commit()
+                yield {
+                    "event": "metadata",
+                    "data": json.dumps(
+                        {
+                            "intent": intent,
+                            "document_profile": "unknown",
+                            "degraded_mode": retrieval_error is not None,
+                            "no_context_reason": no_context_reason_val,
+                            "sources": [],
+                        }
+                    ),
+                }
+
+            return _no_results_stream(), conversation.id
 
         # 3. Format prompt
         formatted_context = self._format_context(context_docs)
@@ -1308,6 +1437,13 @@ class ChatService:
         current_query = self._sanitize_user_query(messages[-1].content)
         summary = self._build_history_summary(bounded_messages)
 
+        empty_context_note = (
+            "\n> **Note:** No documents were retrieved for this query. "
+            "Acknowledge this clearly and tell the user to rephrase or check indexing status.\n"
+            if not context.strip()
+            else ""
+        )
+
         is_legal_intent = intent in ("legal_lookup", "procedural_guidance")
 
         intent_instructions: dict[str, str] = {
@@ -1434,7 +1570,7 @@ Instruction: {intent_instruction}
 
 ## DOCUMENTATION SOURCES PROVIDED
 {context}
-
+{empty_context_note}
 ---
 
 ## CURRENT QUESTION
