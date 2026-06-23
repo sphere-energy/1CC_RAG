@@ -429,7 +429,7 @@ class ChatService:
         )
         try:
             raw = self.llm_client.generate_text(title_prompt).strip()
-            raw = raw.strip('"\'')
+            raw = raw.strip("\"'")
             raw = raw.split("\n")[0].strip()
             return raw[:64] if raw else user_query[:64]
         except Exception:
@@ -802,7 +802,9 @@ class ChatService:
 
         # Update conversation title from first message if not set
         if not conversation.title and len(messages) == 1:
-            conversation.title = self._generate_conversation_title(user_query, response_text)
+            conversation.title = self._generate_conversation_title(
+                user_query, response_text
+            )
 
         # Always update timestamp so conversations sort by last activity
         conversation.updated_at = datetime.utcnow()
@@ -1038,7 +1040,9 @@ class ChatService:
             logger.info("Streaming response saved to database")
 
             if not conversation.title and len(messages) == 1:
-                conversation.title = self._generate_conversation_title(user_query, full_response)
+                conversation.title = self._generate_conversation_title(
+                    user_query, full_response
+                )
                 conversation.updated_at = datetime.utcnow()
                 self.db.commit()
 
@@ -1216,7 +1220,9 @@ class ChatService:
         self.db.add(assistant_message_obj)
 
         if not conversation.title and len(messages) == 1:
-            conversation.title = self._generate_conversation_title(user_query, response_text)
+            conversation.title = self._generate_conversation_title(
+                user_query, response_text
+            )
 
         conversation.updated_at = datetime.utcnow()
         self.db.commit()
@@ -1428,7 +1434,9 @@ class ChatService:
             logger.info("Streaming pinned-document response saved to database")
 
             if not conversation.title and len(messages) == 1:
-                conversation.title = self._generate_conversation_title(user_query, full_response)
+                conversation.title = self._generate_conversation_title(
+                    user_query, full_response
+                )
                 conversation.updated_at = datetime.utcnow()
                 self.db.commit()
 
