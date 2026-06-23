@@ -48,7 +48,7 @@ class MessageResponse(BaseModel):
     id: UUID
     role: str
     content: str
-    metadata: dict[str, Any] | None = Field(None, alias="message_metadata")
+    metadata: dict[str, Any] | None = Field(None, validation_alias="message_metadata")
     created_at: datetime
 
     model_config = {"from_attributes": True, "populate_by_name": True}

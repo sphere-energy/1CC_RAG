@@ -417,6 +417,25 @@ class ChatService:
             return "legal_lookup"
         return "document_lookup"
 
+    def _generate_conversation_title(self, user_query: str, response_text: str) -> str:
+        """Use the LLM to generate a concise, descriptive title (max 64 chars)."""
+        title_prompt = (
+            "Generate a concise, professional title for a conversation. "
+            "The title must be at most 64 characters, clearly summarise the topic, "
+            "and sound natural — no quotes, no trailing punctuation.\n\n"
+            f"User question: {user_query[:300]}\n"
+            f"Assistant response (excerpt): {response_text[:300]}\n\n"
+            "Title:"
+        )
+        try:
+            raw = self.llm_client.generate_text(title_prompt).strip()
+            raw = raw.strip('"\'')
+            raw = raw.split("\n")[0].strip()
+            return raw[:64] if raw else user_query[:64]
+        except Exception:
+            logger.warning("Title generation failed; falling back to query truncation")
+            return user_query[:64]
+
     def _sanitize_user_query(self, user_query: str) -> str:
         blocked_patterns = [
             r"ignore\s+previous\s+instructions",
@@ -694,7 +713,7 @@ class ChatService:
             )
             self.db.add(assistant_message_obj)
             if not conversation.title and len(messages) == 1:
-                conversation.title = user_query[:100]
+                conversation.title = user_query[:64]
             conversation.updated_at = datetime.utcnow()
             self.db.commit()
             self.db.refresh(assistant_message_obj)
@@ -783,7 +802,7 @@ class ChatService:
 
         # Update conversation title from first message if not set
         if not conversation.title and len(messages) == 1:
-            conversation.title = user_query[:100]  # First 100 chars
+            conversation.title = self._generate_conversation_title(user_query, response_text)
 
         # Always update timestamp so conversations sort by last activity
         conversation.updated_at = datetime.utcnow()
@@ -894,7 +913,7 @@ class ChatService:
                 )
                 self.db.add(assistant_message_obj)
                 if not conversation.title and len(messages) == 1:
-                    conversation.title = user_query[:100]
+                    conversation.title = user_query[:64]
                 conversation.updated_at = datetime.utcnow()
                 self.db.commit()
                 yield {
@@ -906,6 +925,7 @@ class ChatService:
                             "degraded_mode": retrieval_error is not None,
                             "no_context_reason": no_context_reason_val,
                             "sources": [],
+                            "conversation_title": conversation.title,
                         }
                     ),
                 }
@@ -997,10 +1017,6 @@ class ChatService:
             )
             self.db.add(assistant_message_obj)
 
-            # Update title if needed
-            if not conversation.title and len(messages) == 1:
-                conversation.title = user_query[:100]
-
             # Always update timestamp so conversations sort by last activity
             conversation.updated_at = datetime.utcnow()
             self.db.commit()
@@ -1020,6 +1036,11 @@ class ChatService:
                 ),
             }
             logger.info("Streaming response saved to database")
+
+            if not conversation.title and len(messages) == 1:
+                conversation.title = self._generate_conversation_title(user_query, full_response)
+                conversation.updated_at = datetime.utcnow()
+                self.db.commit()
 
         return stream_and_save(), conversation.id
 
@@ -1109,7 +1130,7 @@ class ChatService:
             )
             self.db.add(assistant_message_obj)
             if not conversation.title and len(messages) == 1:
-                conversation.title = user_query[:100]
+                conversation.title = user_query[:64]
             conversation.updated_at = datetime.utcnow()
             self.db.commit()
             self.db.refresh(assistant_message_obj)
@@ -1195,7 +1216,7 @@ class ChatService:
         self.db.add(assistant_message_obj)
 
         if not conversation.title and len(messages) == 1:
-            conversation.title = user_query[:100]
+            conversation.title = self._generate_conversation_title(user_query, response_text)
 
         conversation.updated_at = datetime.utcnow()
         self.db.commit()
@@ -1284,7 +1305,7 @@ class ChatService:
                 )
                 self.db.add(assistant_message_obj)
                 if not conversation.title and len(messages) == 1:
-                    conversation.title = user_query[:100]
+                    conversation.title = user_query[:64]
                 conversation.updated_at = datetime.utcnow()
                 self.db.commit()
                 yield {
@@ -1296,6 +1317,7 @@ class ChatService:
                             "degraded_mode": False,
                             "no_context_reason": "pinned_filter_no_hits",
                             "sources": [],
+                            "conversation_title": conversation.title,
                         }
                     ),
                 }
@@ -1385,9 +1407,6 @@ class ChatService:
             )
             self.db.add(assistant_message_obj)
 
-            if not conversation.title and len(messages) == 1:
-                conversation.title = user_query[:100]
-
             conversation.updated_at = datetime.utcnow()
             self.db.commit()
             yield {
@@ -1407,6 +1426,11 @@ class ChatService:
                 ),
             }
             logger.info("Streaming pinned-document response saved to database")
+
+            if not conversation.title and len(messages) == 1:
+                conversation.title = self._generate_conversation_title(user_query, full_response)
+                conversation.updated_at = datetime.utcnow()
+                self.db.commit()
 
         return stream_and_save(), conversation.id
 
