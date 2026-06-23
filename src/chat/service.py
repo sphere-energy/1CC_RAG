@@ -622,6 +622,30 @@ class ChatService:
             "is non-standard. Ask one concise clarification only when it materially improves accuracy."
         )
 
+    def _get_previous_conversation_source_ids(self, conversation_id: UUID) -> list[str]:
+        """Return unique document_ids from the sources of the most recent assistant messages."""
+        prev_messages = (
+            self.db.query(DBMessage)
+            .filter(
+                DBMessage.conversation_id == conversation_id,
+                DBMessage.role == "assistant",
+            )
+            .order_by(DBMessage.created_at.desc())
+            .limit(3)
+            .all()
+        )
+        seen: set[str] = set()
+        doc_ids: list[str] = []
+        for msg in prev_messages:
+            if not msg.message_metadata:
+                continue
+            for src in msg.message_metadata.get("sources", []):
+                doc_id = src.get("document_id")
+                if doc_id and doc_id not in seen:
+                    seen.add(doc_id)
+                    doc_ids.append(doc_id)
+        return doc_ids
+
     def generate_response(
         self,
         messages: list[Message],
@@ -679,6 +703,28 @@ class ChatService:
             retrieval_error = exc
             logger.warning("Retrieval degraded for conversation %s", conversation.id)
 
+        is_follow_up = any(m.role == "assistant" for m in messages)
+        if not context_docs and retrieval_error is None and is_follow_up:
+            prev_doc_ids = self._get_previous_conversation_source_ids(conversation.id)
+            for doc_id in prev_doc_ids[:3]:
+                try:
+                    fallback_docs, _ = self.retriever.retrieve_by_document(
+                        document_id=doc_id
+                    )
+                    if fallback_docs:
+                        context_docs = fallback_docs
+                        retrieval_diagnostics["reused_from_history"] = True
+                        logger.info(
+                            "General chat: reusing history sources for conversation %s",
+                            conversation.id,
+                        )
+                        break
+                except QdrantException:
+                    pass
+
+        should_short_circuit = False
+        response_text = ""
+        no_context_reason = "no_relevant_hits"
         if not context_docs:
             if retrieval_error is not None:
                 logger.warning(
@@ -688,7 +734,8 @@ class ChatService:
                 )
                 response_text = self._retrieval_error_message()
                 no_context_reason = "retrieval_error"
-            else:
+                should_short_circuit = True
+            elif not is_follow_up:
                 logger.info(
                     "General chat: similarity search returned no results — "
                     "short-circuiting LLM call for conversation %s",
@@ -696,6 +743,15 @@ class ChatService:
                 )
                 response_text = self._no_results_message()
                 no_context_reason = "similarity_search_no_hits"
+                should_short_circuit = True
+            else:
+                logger.info(
+                    "General chat: no results for follow-up question — proceeding "
+                    "with conversation history for conversation %s",
+                    conversation.id,
+                )
+
+        if should_short_circuit:
             no_results_metadata: dict[str, Any] = {
                 "sources": [],
                 "model": self.llm_client.text_model_id,
@@ -877,6 +933,28 @@ class ChatService:
                 conversation.id,
             )
 
+        is_follow_up = any(m.role == "assistant" for m in messages)
+        if not context_docs and retrieval_error is None and is_follow_up:
+            prev_doc_ids = self._get_previous_conversation_source_ids(conversation.id)
+            for doc_id in prev_doc_ids[:3]:
+                try:
+                    fallback_docs, _ = self.retriever.retrieve_by_document(
+                        document_id=doc_id
+                    )
+                    if fallback_docs:
+                        context_docs = fallback_docs
+                        retrieval_diagnostics["reused_from_history"] = True
+                        logger.info(
+                            "General chat (stream): reusing history sources for conversation %s",
+                            conversation.id,
+                        )
+                        break
+                except QdrantException:
+                    pass
+
+        should_short_circuit = False
+        no_results_msg = ""
+        no_context_reason_val = "no_relevant_hits"
         if not context_docs:
             if retrieval_error is not None:
                 logger.warning(
@@ -886,7 +964,8 @@ class ChatService:
                 )
                 no_results_msg = self._retrieval_error_message()
                 no_context_reason_val = "retrieval_error"
-            else:
+                should_short_circuit = True
+            elif not is_follow_up:
                 logger.info(
                     "General chat (stream): similarity search returned no results — "
                     "short-circuiting LLM call for conversation %s",
@@ -894,6 +973,15 @@ class ChatService:
                 )
                 no_results_msg = self._no_results_message()
                 no_context_reason_val = "similarity_search_no_hits"
+                should_short_circuit = True
+            else:
+                logger.info(
+                    "General chat (stream): no results for follow-up question — proceeding "
+                    "with conversation history for conversation %s",
+                    conversation.id,
+                )
+
+        if should_short_circuit:
             no_results_meta: dict[str, Any] = {
                 "sources": [],
                 "model": self.llm_client.text_model_id,
