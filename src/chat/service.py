@@ -649,7 +649,9 @@ class ChatService:
                     doc_ids.append(doc_id)
         return doc_ids
 
-    def _build_retrieval_query(self, messages: list[Message], is_follow_up: bool) -> str:
+    def _build_retrieval_query(
+        self, messages: list[Message], is_follow_up: bool
+    ) -> str:
         """Enrich the retrieval query for follow-up turns with recent conversation context.
 
         A bare follow-up like "what about for Germany?" lacks enough signal for the
@@ -678,9 +680,7 @@ class ChatService:
         if not prev_source_ids:
             return True
         new_ids = {
-            doc.get("document_id")
-            for doc in context_docs
-            if doc.get("document_id")
+            doc.get("document_id") for doc in context_docs if doc.get("document_id")
         }
         return bool(new_ids & set(prev_source_ids))
 
@@ -1176,7 +1176,9 @@ class ChatService:
 
         def stream_and_save() -> Iterator[dict[str, str]]:
             yield {"event": "progress", "data": "retrieval_complete"}
-            for chunk in self.llm_client.generate_text_stream(prompt, temperature=temperature):
+            for chunk in self.llm_client.generate_text_stream(
+                prompt, temperature=temperature
+            ):
                 accumulated_response.append(chunk)
                 yield {"event": "data", "data": chunk}
 
@@ -1572,7 +1574,9 @@ class ChatService:
 
         def stream_and_save() -> Iterator[dict[str, str]]:
             yield {"event": "progress", "data": "retrieval_complete"}
-            for chunk in self.llm_client.generate_text_stream(prompt, temperature=temperature):
+            for chunk in self.llm_client.generate_text_stream(
+                prompt, temperature=temperature
+            ):
                 accumulated_response.append(chunk)
                 yield {"event": "data", "data": chunk}
 

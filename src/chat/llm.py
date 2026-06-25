@@ -214,7 +214,9 @@ class BedrockClient:
                 detail={"error": str(e)},
             )
 
-    def generate_text_stream(self, prompt: str, temperature: float = 0.7) -> Iterator[str]:
+    def generate_text_stream(
+        self, prompt: str, temperature: float = 0.7
+    ) -> Iterator[str]:
         """
         Generate text using streaming with circuit breaker protection.
 
@@ -246,7 +248,9 @@ class BedrockClient:
                 detail={"circuit_breaker": "open"},
             )
 
-    def _generate_text_stream_impl(self, prompt: str, temperature: float = 0.7) -> Iterator[str]:
+    def _generate_text_stream_impl(
+        self, prompt: str, temperature: float = 0.7
+    ) -> Iterator[str]:
         """Internal implementation of streaming text generation."""
         logger.info("Generating text stream for prompt: %s...", prompt[:50])
 
