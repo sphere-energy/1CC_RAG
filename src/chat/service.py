@@ -549,9 +549,12 @@ class ChatService:
         context_docs: list[dict[str, Any]],
         intent: str,
     ) -> str:
-        """Infer dominant document profile from retrieved context and intent."""
-        if intent in ("legal_lookup", "procedural_guidance"):
-            return "legal_regulatory"
+        """Infer dominant document profile from retrieved context.
+
+        The profile is derived solely from the retrieved documents so that a question
+        phrased with legal-sounding keywords does not force the strict legal format on
+        answers that are actually grounded in HR or general company content.
+        """
 
         if not context_docs:
             return "employee_general"
@@ -646,6 +649,51 @@ class ChatService:
                     doc_ids.append(doc_id)
         return doc_ids
 
+    def _build_retrieval_query(self, messages: list[Message], is_follow_up: bool) -> str:
+        """Enrich the retrieval query for follow-up turns with recent conversation context.
+
+        A bare follow-up like "what about for Germany?" lacks enough signal for the
+        vector search to find the right documents.  Prepending the last assistant
+        response gives the embedding model enough context to stay on-topic.
+        """
+        latest = messages[-1].content
+        if not is_follow_up or len(messages) < 3:
+            return latest
+        for msg in reversed(messages[:-1]):
+            if msg.role == "assistant":
+                return f"{msg.content[:300]}\n\n{latest}"
+        return latest
+
+    def _sources_overlap(
+        self,
+        context_docs: list[dict[str, Any]],
+        prev_source_ids: list[str],
+    ) -> bool:
+        """Return True when at least one retrieved doc_id was present in recent turns.
+
+        Used to detect silent topic-drift on follow-up questions: if none of the newly
+        retrieved documents were referenced in the previous turns, the search has likely
+        landed on unrelated material and we should fall back to prior sources.
+        """
+        if not prev_source_ids:
+            return True
+        new_ids = {
+            doc.get("document_id")
+            for doc in context_docs
+            if doc.get("document_id")
+        }
+        return bool(new_ids & set(prev_source_ids))
+
+    def _pick_generation_temperature(self, intent: str, document_profile: str) -> float:
+        """Return a generation temperature tuned to the response type.
+
+        Legal and procedural answers must stay close to the source text, so we use a
+        lower temperature.  General document Q&A allows a little more latitude.
+        """
+        if document_profile == "legal_regulatory" or intent == "procedural_guidance":
+            return 0.2
+        return 0.4
+
     def generate_response(
         self,
         messages: list[Message],
@@ -682,6 +730,7 @@ class ChatService:
         user_query = messages[-1].content
 
         intent = self._classify_intent(user_query)
+        is_follow_up = any(m.role == "assistant" for m in messages)
 
         retrieval_error = None
         context_docs: list[dict[str, Any]] = []
@@ -691,9 +740,10 @@ class ChatService:
             "citation_coverage": 0.0,
         }
 
+        retrieval_query = self._build_retrieval_query(messages, is_follow_up)
         try:
             query_embedding = self.llm_client.generate_embedding(
-                user_query, input_type="search_query"
+                retrieval_query, input_type="search_query"
             )
             context_docs, retrieval_diagnostics = self.retriever.retrieve(
                 query_embedding,
@@ -703,7 +753,37 @@ class ChatService:
             retrieval_error = exc
             logger.warning("Retrieval degraded for conversation %s", conversation.id)
 
-        is_follow_up = any(m.role == "assistant" for m in messages)
+        if (
+            context_docs
+            and retrieval_error is None
+            and self.settings.retrieval_relevance_gate_enabled
+        ):
+            best_score = max(
+                (doc.get("score") or 0.0 for doc in context_docs), default=0.0
+            )
+            if best_score < self.settings.retrieval_min_score:
+                logger.info(
+                    "Relevance gate: rejecting %d docs (best score %.3f < threshold %.3f) "
+                    "for conversation %s",
+                    len(context_docs),
+                    best_score,
+                    self.settings.retrieval_min_score,
+                    conversation.id,
+                )
+                context_docs = []
+                retrieval_diagnostics["gate_rejected"] = True
+
+        if is_follow_up and context_docs and retrieval_error is None:
+            prev_doc_ids = self._get_previous_conversation_source_ids(conversation.id)
+            if prev_doc_ids and not self._sources_overlap(context_docs, prev_doc_ids):
+                logger.info(
+                    "Follow-up mismatch: new sources don't overlap with prior sources — "
+                    "discarding new results for conversation %s",
+                    conversation.id,
+                )
+                context_docs = []
+                retrieval_diagnostics["source_mismatch_fallback"] = True
+
         if not context_docs and retrieval_error is None and is_follow_up:
             prev_doc_ids = self._get_previous_conversation_source_ids(conversation.id)
             for doc_id in prev_doc_ids[:3]:
@@ -792,7 +872,8 @@ class ChatService:
         prompt = self._truncate_prompt(prompt)
 
         # 4. Generate answer
-        response_text = self.llm_client.generate_text(prompt)
+        temperature = self._pick_generation_temperature(intent, document_profile)
+        response_text = self.llm_client.generate_text(prompt, temperature=temperature)
         response_text = self._validate_output(response_text)
         response_text = self._append_uncertainty_if_needed(
             response_text,
@@ -909,6 +990,7 @@ class ChatService:
         user_query = messages[-1].content
 
         intent = self._classify_intent(user_query)
+        is_follow_up = any(m.role == "assistant" for m in messages)
 
         retrieval_error = None
         context_docs: list[dict[str, Any]] = []
@@ -918,9 +1000,10 @@ class ChatService:
             "citation_coverage": 0.0,
         }
 
+        retrieval_query = self._build_retrieval_query(messages, is_follow_up)
         try:
             query_embedding = self.llm_client.generate_embedding(
-                user_query, input_type="search_query"
+                retrieval_query, input_type="search_query"
             )
             context_docs, retrieval_diagnostics = self.retriever.retrieve(
                 query_embedding,
@@ -933,7 +1016,37 @@ class ChatService:
                 conversation.id,
             )
 
-        is_follow_up = any(m.role == "assistant" for m in messages)
+        if (
+            context_docs
+            and retrieval_error is None
+            and self.settings.retrieval_relevance_gate_enabled
+        ):
+            best_score = max(
+                (doc.get("score") or 0.0 for doc in context_docs), default=0.0
+            )
+            if best_score < self.settings.retrieval_min_score:
+                logger.info(
+                    "Relevance gate (stream): rejecting %d docs "
+                    "(best score %.3f < threshold %.3f) for conversation %s",
+                    len(context_docs),
+                    best_score,
+                    self.settings.retrieval_min_score,
+                    conversation.id,
+                )
+                context_docs = []
+                retrieval_diagnostics["gate_rejected"] = True
+
+        if is_follow_up and context_docs and retrieval_error is None:
+            prev_doc_ids = self._get_previous_conversation_source_ids(conversation.id)
+            if prev_doc_ids and not self._sources_overlap(context_docs, prev_doc_ids):
+                logger.info(
+                    "Follow-up mismatch (stream): new sources don't overlap with "
+                    "prior sources — discarding new results for conversation %s",
+                    conversation.id,
+                )
+                context_docs = []
+                retrieval_diagnostics["source_mismatch_fallback"] = True
+
         if not context_docs and retrieval_error is None and is_follow_up:
             prev_doc_ids = self._get_previous_conversation_source_ids(conversation.id)
             for doc_id in prev_doc_ids[:3]:
@@ -1059,10 +1172,11 @@ class ChatService:
         else:
             persisted_profile_memory = []
         history_summary = self._build_history_summary(messages)
+        temperature = self._pick_generation_temperature(intent, document_profile)
 
         def stream_and_save() -> Iterator[dict[str, str]]:
             yield {"event": "progress", "data": "retrieval_complete"}
-            for chunk in self.llm_client.generate_text_stream(prompt):
+            for chunk in self.llm_client.generate_text_stream(prompt, temperature=temperature):
                 accumulated_response.append(chunk)
                 yield {"event": "data", "data": chunk}
 
@@ -1243,7 +1357,8 @@ class ChatService:
         )
         prompt = self._truncate_prompt(prompt)
 
-        response_text = self.llm_client.generate_text(prompt)
+        temperature = self._pick_generation_temperature(intent, document_profile)
+        response_text = self.llm_client.generate_text(prompt, temperature=temperature)
         response_text = self._validate_output(response_text)
         response_text = self._append_uncertainty_if_needed(
             response_text,
@@ -1453,10 +1568,11 @@ class ChatService:
         else:
             persisted_profile_memory = []
         history_summary = self._build_history_summary(messages)
+        temperature = self._pick_generation_temperature(intent, document_profile)
 
         def stream_and_save() -> Iterator[dict[str, str]]:
             yield {"event": "progress", "data": "retrieval_complete"}
-            for chunk in self.llm_client.generate_text_stream(prompt):
+            for chunk in self.llm_client.generate_text_stream(prompt, temperature=temperature):
                 accumulated_response.append(chunk)
                 yield {"event": "data", "data": chunk}
 
@@ -1564,7 +1680,7 @@ class ChatService:
             else ""
         )
 
-        is_legal_intent = intent in ("legal_lookup", "procedural_guidance")
+        is_legal_intent = document_profile == "legal_regulatory"
 
         intent_instructions: dict[str, str] = {
             "legal_lookup": "Prioritize precise legal grounding and source-backed obligations.",
@@ -1595,15 +1711,18 @@ For each question, structure your response as follows:
             citation_and_accuracy = """
 # LEGAL CITATION REQUIREMENTS (CRITICAL)
 
-Every legal reference MUST include a metadata block in this format:
+When a source document explicitly contains citation details, include a metadata block.
+Only populate fields whose exact text appears in the retrieved source.  If a field is
+not present in the source, write "Not available in source" — do not guess, infer, or
+construct plausible-sounding values.
 
 **[Legal Source Metadata]**
-- Official Citation: [e.g., BEK nr 986 af 20/06/2025]
-- Document Title: [Full official name]
-- Relevant Section: [Article/Paragraph/Annex number]
-- Jurisdiction: [Country/EU]
-- Status: [In force since DD/MM/YYYY | Repealed by X | Superseded by Y]
-- Transitional Period: [If applicable: dates and conditions]
+- Official Citation: [copy exactly from source, or "Not available in source"]
+- Document Title: [copy exactly from source, or "Not available in source"]
+- Relevant Section: [copy exactly from source, or "Not available in source"]
+- Jurisdiction: [copy exactly from source, or "Not available in source"]
+- Status: [copy exactly from source, or "Not available in source"]
+- Transitional Period: [copy exactly from source, or "Not available in source"]
 
 # ACCURACY & PRECISION STANDARDS
 
@@ -1647,10 +1766,10 @@ You are the 1CC & Techprotect knowledge assistant. You help employees and consul
 
     # PROHIBITED RESPONSE STYLE (MANDATORY)
 
-    - Do not say that the provided sources are "not company documentation".
-    - Do not say that the documents are mismatched, irrelevant by category, or unusable because they are academic.
+    - Do not reject documents based on their format, origin, or category (e.g. do not say "this is not company documentation" or "this source is academic").
     - Do not block the user before attempting an answer from the available sources.
     - If context is weak, provide the best answer possible first, then ask one precise follow-up (for example a section, title, or excerpt) to improve accuracy.
+    - If the retrieved material genuinely does not contain information needed to answer the question, say so honestly — do not fabricate an answer or force a connection that is not supported by the source text.
 
 # DOCUMENT PROFILE ADAPTATION (MANDATORY)
 

@@ -78,6 +78,10 @@ class Settings(BaseSettings):
     max_history_messages: int = 24
     summary_trigger_messages: int = 12
 
+    # Retrieval relevance gating
+    retrieval_relevance_gate_enabled: bool = True
+    retrieval_min_score: float = 0.35
+
     # Ingest endpoint: shared secret expected in X-Internal-API-Key header.
     # Set to a non-empty value in production (e.g. a 32-byte random hex string).
     ingest_internal_api_key: str = ""
