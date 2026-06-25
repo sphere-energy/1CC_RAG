@@ -56,12 +56,16 @@ class BedrockClient:
                 detail={"error": str(e)},
             )
 
-    def generate_embedding(self, text: str) -> list[float]:
+    def generate_embedding(
+        self, text: str, input_type: str = "search_document"
+    ) -> list[float]:
         """
         Generate text embedding using the Cohere Embed model with circuit breaker protection.
 
         Args:
             text (str): The text to embed.
+            input_type (str): Cohere input type. Use "search_document" when indexing
+                and "search_query" when embedding a user question.
 
         Returns:
             List[float]: The generated embedding vector.
@@ -70,7 +74,7 @@ class BedrockClient:
             BedrockException: If the Bedrock call fails or circuit is open.
         """
         try:
-            return self.breaker.call(self._generate_embedding_impl, text)
+            return self.breaker.call(self._generate_embedding_impl, text, input_type)
         except CircuitBreakerError as e:
             logger.error("Circuit breaker open for Bedrock: %s", e)
             raise BedrockException(
@@ -78,14 +82,16 @@ class BedrockClient:
                 detail={"circuit_breaker": "open"},
             )
 
-    def _generate_embedding_impl(self, text: str) -> list[float]:
+    def _generate_embedding_impl(
+        self, text: str, input_type: str = "search_document"
+    ) -> list[float]:
         """Internal implementation of embedding generation."""
         logger.info("Generating embedding for text: %s...", text[:50])
 
         body = json.dumps(
             {
                 "texts": [text],
-                "input_type": "search_document",
+                "input_type": input_type,
                 "embedding_types": ["float"],
             },
         )
@@ -123,12 +129,14 @@ class BedrockClient:
                 detail={"error": str(e)},
             )
 
-    def generate_text(self, prompt: str) -> str:
+    def generate_text(self, prompt: str, temperature: float = 0.7) -> str:
         """
         Generate text using the Anthropic Claude model with circuit breaker protection.
 
         Args:
             prompt (str): The input prompt for the model.
+            temperature (float): Sampling temperature. Lower values keep output closer to
+                source text; higher values allow more creativity.
 
         Returns:
             str: The generated text response.
@@ -137,7 +145,7 @@ class BedrockClient:
             BedrockException: If the Bedrock call fails or circuit is open.
         """
         try:
-            return self.breaker.call(self._generate_text_impl, prompt)
+            return self.breaker.call(self._generate_text_impl, prompt, temperature)
         except CircuitBreakerError as e:
             logger.error("Circuit breaker open for Bedrock: %s", e)
             raise BedrockException(
@@ -145,7 +153,7 @@ class BedrockClient:
                 detail={"circuit_breaker": "open"},
             )
 
-    def _generate_text_impl(self, prompt: str) -> str:
+    def _generate_text_impl(self, prompt: str, temperature: float = 0.7) -> str:
         """Internal implementation of text generation."""
         logger.info("Generating text for prompt: %s...", prompt[:50])
 
@@ -153,7 +161,7 @@ class BedrockClient:
             {
                 "anthropic_version": "bedrock-2023-05-31",
                 "max_tokens": 10000,
-                "temperature": 0.7,
+                "temperature": temperature,
                 "messages": [
                     {
                         "role": "user",
@@ -206,12 +214,15 @@ class BedrockClient:
                 detail={"error": str(e)},
             )
 
-    def generate_text_stream(self, prompt: str) -> Iterator[str]:
+    def generate_text_stream(
+        self, prompt: str, temperature: float = 0.7
+    ) -> Iterator[str]:
         """
         Generate text using streaming with circuit breaker protection.
 
         Args:
             prompt (str): The input prompt for the model.
+            temperature (float): Sampling temperature passed through to the model.
 
         Yields:
             str: Text chunks as they are generated.
@@ -228,7 +239,7 @@ class BedrockClient:
                     detail={"circuit_breaker": "open"},
                 )
 
-            yield from self._generate_text_stream_impl(prompt)
+            yield from self._generate_text_stream_impl(prompt, temperature)
 
         except CircuitBreakerError as e:
             logger.error("Circuit breaker open for Bedrock: %s", e)
@@ -237,7 +248,9 @@ class BedrockClient:
                 detail={"circuit_breaker": "open"},
             )
 
-    def _generate_text_stream_impl(self, prompt: str) -> Iterator[str]:
+    def _generate_text_stream_impl(
+        self, prompt: str, temperature: float = 0.7
+    ) -> Iterator[str]:
         """Internal implementation of streaming text generation."""
         logger.info("Generating text stream for prompt: %s...", prompt[:50])
 
@@ -245,7 +258,7 @@ class BedrockClient:
             {
                 "anthropic_version": "bedrock-2023-05-31",
                 "max_tokens": 10000,
-                "temperature": 0.7,
+                "temperature": temperature,
                 "messages": [
                     {
                         "role": "user",

@@ -1,10 +1,14 @@
+import asyncio
 import logging
+import threading
 from functools import lru_cache
+from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request
 from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
+from src.chat.ingest import DocumentIngestService
 from src.chat.llm import BedrockClient
 from src.chat.retriever import QdrantRetriever
 from src.chat.schemas import (
@@ -15,6 +19,8 @@ from src.chat.schemas import (
     ConversationListResponse,
     ConversationRenameRequest,
     DocumentChatRequest,
+    DocumentIngestRequest,
+    IngestResponse,
     PersonalizationUpdate,
     ProfileMemoryCreate,
 )
@@ -28,6 +34,53 @@ from src.limiter import limiter
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+_SENTINEL: Any = object()
+
+
+async def _iter_sync_gen(sync_gen: Any) -> Any:
+    """
+    Consume a synchronous generator in a **single dedicated background thread**
+    and yield its items asynchronously via an asyncio.Queue.
+
+    Why a single thread matters
+    ---------------------------
+    * boto3 EventStream reads from an underlying urllib3 HTTP socket.  That
+      socket must be read from the same OS thread throughout the stream.
+    * SQLAlchemy sessions are not thread-safe across different threads.
+
+    Using ``loop.run_in_executor`` dispatches each ``next()`` call to an
+    arbitrary worker thread, breaking both invariants.  This helper avoids
+    that by keeping the generator lifecycle confined to one thread while the
+    asyncio event loop remains free between yields.
+    """
+    loop = asyncio.get_running_loop()
+    queue: asyncio.Queue = asyncio.Queue(maxsize=32)
+
+    def _producer() -> None:
+        try:
+            for item in sync_gen:
+                asyncio.run_coroutine_threadsafe(queue.put(item), loop).result()
+        except BaseException as exc:
+            try:
+                asyncio.run_coroutine_threadsafe(queue.put(exc), loop).result()
+            except Exception:
+                pass
+        finally:
+            try:
+                asyncio.run_coroutine_threadsafe(queue.put(_SENTINEL), loop).result()
+            except Exception:
+                pass
+
+    threading.Thread(target=_producer, daemon=True).start()
+
+    while True:
+        item = await queue.get()
+        if item is _SENTINEL:
+            break
+        if isinstance(item, BaseException):
+            raise item
+        yield item
 
 
 def _collaborative_stream_error_message() -> str:
@@ -116,8 +169,9 @@ async def chat_endpoint(
                     # Send conversation ID first
                     yield {"event": "conversation_id", "data": str(conversation_id)}
 
-                    # Stream response chunks
-                    for event in stream_gen:
+                    # Stream response chunks — run each next() in a thread pool
+                    # so blocking boto3/DB calls don't freeze the event loop.
+                    async for event in _iter_sync_gen(stream_gen):
                         yield event
 
                 except APIException as e:
@@ -199,7 +253,7 @@ async def chat_document_endpoint(
                         )
                     )
                     yield {"event": "conversation_id", "data": str(conversation_id)}
-                    for event in stream_gen:
+                    async for event in _iter_sync_gen(stream_gen):
                         yield event
                 except APIException as e:
                     logger.error("APIException during streaming: %s", e.message)
@@ -356,3 +410,80 @@ async def rename_conversation(
         return ConversationListItem(**result)
     except APIException as e:
         raise HTTPException(status_code=e.status_code, detail=e.message)
+
+
+def _verify_internal_key(
+    x_internal_api_key: str | None = Header(default=None, alias="X-Internal-API-Key"),
+    settings: Settings = Depends(get_settings),
+) -> None:
+    """
+    Dependency that validates the shared secret sent by KMS.
+
+    If ``ingest_internal_api_key`` is empty (e.g. local dev), the check is
+    skipped so the endpoint can be called without authentication.
+    """
+    expected = settings.ingest_internal_api_key
+    if not expected:
+        logger.warning(
+            "INGEST_INTERNAL_API_KEY is not set — ingest endpoint is unprotected"
+        )
+        return
+    if not x_internal_api_key or x_internal_api_key != expected:
+        raise HTTPException(
+            status_code=401, detail="Invalid or missing internal API key"
+        )
+
+
+@lru_cache
+def get_ingest_service_singleton() -> DocumentIngestService:
+    settings = get_settings()
+    llm_client = get_llm_client_singleton()
+    return DocumentIngestService(llm_client, settings)
+
+
+@router.post(
+    "/documents/ingest",
+    response_model=IngestResponse,
+    status_code=202,
+    summary="Trigger asynchronous document ingestion into Qdrant",
+)
+async def ingest_document(
+    ingest_request: DocumentIngestRequest,
+    background_tasks: BackgroundTasks,
+    _auth: None = Depends(_verify_internal_key),
+) -> IngestResponse:
+    """
+    Called by the KMS Go backend after a successful document upload.
+
+    The heavy work (download → parse → chunk → embed → index) is dispatched
+    as a background task so this endpoint returns **202 Accepted** immediately.
+    """
+    ingest_service = get_ingest_service_singleton()
+
+    def _run() -> None:
+        try:
+            result = ingest_service.ingest(ingest_request)
+            logger.info(
+                "Background ingestion finished: legislation_id=%s document_id=%s result=%s",
+                ingest_request.legislation_id,
+                ingest_request.document_id,
+                result,
+            )
+        except Exception as exc:
+            logger.error(
+                "Background ingestion failed: legislation_id=%s document_id=%s error=%s",
+                ingest_request.legislation_id,
+                ingest_request.document_id,
+                exc,
+                exc_info=True,
+            )
+            ingest_service._notify_kms(str(ingest_request.document_id), "failed")
+
+    background_tasks.add_task(_run)
+
+    return IngestResponse(
+        status="accepted",
+        message="Document queued for ingestion",
+        legislation_id=ingest_request.legislation_id,
+        document_id=ingest_request.document_id,
+    )

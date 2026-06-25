@@ -6,3 +6,27 @@
 # Our version: ecdsa>=0.19.0 (pinned in requirements.txt)
 # Reference: https://github.com/tlsfuzzer/python-ecdsa/releases/tag/v0.19.0
 CVE-2024-23342
+
+# ---------------------------------------------------------------------------
+# Debian 13 (trixie) base-image OS CVEs — fix_deferred by Debian upstream.
+# These are in system packages (perl, ncurses, sqlite) that are NOT invoked
+# by the application at runtime. No patched package version exists yet;
+# ignore-unfixed: true in the workflow handles the "affected" subset, but
+# "fix_deferred" status is not covered by that flag and must be listed here.
+# Re-evaluate and remove entries once Debian ships fixes.
+# ---------------------------------------------------------------------------
+
+# CVE-2026-42496: perl Archive::Tar path traversal via crafted symlinks
+# Status: fix_deferred — perl-base is a transitive OS dep, not used by app
+# Reference: https://avd.aquasec.com/nvd/cve-2026-42496
+CVE-2026-42496
+
+# CVE-2026-42497: perl Archive::Tar arbitrary file modification via hardlinks
+# Status: fix_deferred — perl-base is a transitive OS dep, not used by app
+# Reference: https://avd.aquasec.com/nvd/cve-2026-42497
+CVE-2026-42497
+
+# CVE-2026-9538: perl Archive::Tar memory exhaustion
+# Status: fix_deferred — perl-base is a transitive OS dep, not used by app
+# Reference: https://avd.aquasec.com/nvd/cve-2026-9538
+CVE-2026-9538

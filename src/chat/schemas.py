@@ -48,7 +48,7 @@ class MessageResponse(BaseModel):
     id: UUID
     role: str
     content: str
-    metadata: dict[str, Any] | None = Field(None, alias="message_metadata")
+    metadata: dict[str, Any] | None = Field(None, validation_alias="message_metadata")
     created_at: datetime
 
     model_config = {"from_attributes": True, "populate_by_name": True}
@@ -77,6 +77,27 @@ class ConversationDetail(BaseModel):
 class ConversationListResponse(BaseModel):
     items: list[ConversationListItem]
     total: int
+
+
+class DocumentIngestRequest(BaseModel):
+    legislation_id: UUID = Field(
+        ..., description="UUID of the legislation record in KMS"
+    )
+    document_id: UUID = Field(..., description="UUID of the document metadata record")
+    file_url: str = Field(
+        ..., description="Presigned or public URL to download the PDF"
+    )
+    title: str = Field(..., description="Human-readable title of the document")
+    publication_date: str | None = Field(
+        None, description="ISO date string, e.g. '2024-01-15'"
+    )
+
+
+class IngestResponse(BaseModel):
+    status: str = Field(..., description="'accepted' when the job was queued")
+    message: str
+    legislation_id: UUID
+    document_id: UUID
 
 
 class DocumentChatRequest(BaseModel):

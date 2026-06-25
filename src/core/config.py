@@ -78,6 +78,21 @@ class Settings(BaseSettings):
     max_history_messages: int = 24
     summary_trigger_messages: int = 12
 
+    # Retrieval relevance gating
+    retrieval_relevance_gate_enabled: bool = True
+    retrieval_min_score: float = 0.35
+
+    # Ingest endpoint: shared secret expected in X-Internal-API-Key header.
+    # Set to a non-empty value in production (e.g. a 32-byte random hex string).
+    ingest_internal_api_key: str = ""
+
+    # KMS callback: base URL of the KMS service so RAG can update indexing status.
+    # Example: http://localhost:8080  (no trailing slash)
+    kms_callback_url: str = ""
+    # Re-use the same shared secret for the reverse callback direction.
+    # In KMS this env var is RAG_INTERNAL_API_KEY.
+    kms_internal_api_key: str = ""
+
     # Logging
     log_level: str = "INFO"
 
