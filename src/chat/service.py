@@ -1358,6 +1358,41 @@ class ChatService:
                 not_indexed_metadata,
             )
 
+        if not context_docs and retrieval_error is not None:
+            logger.warning(
+                "Pinned-document: retrieval error, no context (legislation_id=%s) — "
+                "returning degraded message without calling LLM",
+                legislation_id,
+            )
+            response_text = self._retrieval_error_message()
+            degraded_metadata: dict[str, Any] = {
+                "sources": [],
+                "model": self.llm_client.text_model_id,
+                "intent": intent,
+                "document_profile": "unknown",
+                "degraded_mode": True,
+                "no_context_reason": "retrieval_degraded",
+                "retrieval": retrieval_diagnostics,
+            }
+            assistant_message_obj = DBMessage(
+                conversation_id=conversation.id,
+                role="assistant",
+                content=response_text,
+                message_metadata=degraded_metadata,
+            )
+            self.db.add(assistant_message_obj)
+            if not conversation.title and len(messages) == 1:
+                conversation.title = user_query[:64]
+            conversation.updated_at = datetime.utcnow()
+            self.db.commit()
+            self.db.refresh(assistant_message_obj)
+            return (
+                response_text,
+                conversation.id,
+                assistant_message_obj.id,
+                degraded_metadata,
+            )
+
         formatted_context = self._format_context(context_docs)
         document_profile = self._infer_document_profile(context_docs, intent)
         prompt = self._construct_prompt(
@@ -1544,6 +1579,55 @@ class ChatService:
                 }
 
             return _not_indexed_stream(), conversation.id
+
+        if not context_docs and retrieval_error is not None:
+            # Qdrant was reachable but returned an error — return a graceful
+            # degraded message instead of calling the LLM with no context.
+            logger.warning(
+                "Streaming pinned-document: retrieval error, no context available "
+                "(legislation_id=%s) — returning degraded message without calling LLM",
+                legislation_id,
+            )
+            degraded_msg = self._retrieval_error_message()
+            degraded_meta: dict[str, Any] = {
+                "sources": [],
+                "model": self.llm_client.text_model_id,
+                "intent": intent,
+                "document_profile": "unknown",
+                "degraded_mode": True,
+                "no_context_reason": "retrieval_degraded",
+                "retrieval": retrieval_diagnostics,
+            }
+
+            def _degraded_stream() -> Iterator[dict[str, str]]:
+                yield {"event": "progress", "data": "retrieval_complete"}
+                yield {"event": "data", "data": degraded_msg}
+                assistant_message_obj = DBMessage(
+                    conversation_id=conversation.id,
+                    role="assistant",
+                    content=degraded_msg,
+                    message_metadata=degraded_meta,
+                )
+                self.db.add(assistant_message_obj)
+                if not conversation.title and len(messages) == 1:
+                    conversation.title = user_query[:64]
+                conversation.updated_at = datetime.utcnow()
+                self.db.commit()
+                yield {
+                    "event": "metadata",
+                    "data": json.dumps(
+                        {
+                            "intent": intent,
+                            "document_profile": "unknown",
+                            "degraded_mode": True,
+                            "no_context_reason": "retrieval_degraded",
+                            "sources": [],
+                            "conversation_title": conversation.title,
+                        },
+                    ),
+                }
+
+            return _degraded_stream(), conversation.id
 
         formatted_context = self._format_context(context_docs)
         document_profile = self._infer_document_profile(context_docs, intent)

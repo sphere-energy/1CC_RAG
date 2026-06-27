@@ -392,19 +392,46 @@ class QdrantRetriever:
 
         all_records = []
         next_page_offset = None
-        while True:
-            records, next_page_offset = self._with_retries(
-                self.client.scroll,
-                collection_name=self.collection_name,
-                scroll_filter=scroll_filter,
-                limit=100,
-                offset=next_page_offset,
-                with_payload=True,
-                with_vectors=False,
+        try:
+            while True:
+                records, next_page_offset = self._with_retries(
+                    self.client.scroll,
+                    collection_name=self.collection_name,
+                    scroll_filter=scroll_filter,
+                    limit=100,
+                    offset=next_page_offset,
+                    with_payload=True,
+                    with_vectors=False,
+                )
+                all_records.extend(records)
+                if next_page_offset is None:
+                    break
+        except UnexpectedResponse as exc:
+            logger.error(
+                "Qdrant scroll failed for pinned document (lookup=%s): %s",
+                lookup_value,
+                exc,
             )
-            all_records.extend(records)
-            if next_page_offset is None:
-                break
+            raise QdrantException(
+                message="Failed to retrieve document chunks from Qdrant",
+                detail={
+                    "error": str(exc),
+                    "status_code": (
+                        exc.status_code if hasattr(exc, "status_code") else None
+                    ),
+                    "lookup_value": lookup_value,
+                },
+            )
+        except Exception as exc:
+            logger.error(
+                "Unexpected error during Qdrant scroll (lookup=%s): %s",
+                lookup_value,
+                exc,
+            )
+            raise QdrantException(
+                message="Failed to retrieve document chunks from Qdrant",
+                detail={"error": str(exc), "lookup_value": lookup_value},
+            )
 
         results: list[dict[str, Any]] = []
         for record in all_records:

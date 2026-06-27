@@ -256,13 +256,21 @@ async def chat_document_endpoint(
                     async for event in _iter_sync_gen(stream_gen):
                         yield event
                 except APIException as e:
-                    logger.error("APIException during streaming: %s", e.message)
+                    logger.error(
+                        "APIException during pinned-document streaming: %s",
+                        e.message,
+                        exc_info=True,
+                    )
                     yield {
                         "event": "error",
                         "data": _collaborative_stream_error_message(),
                     }
                 except Exception as e:
-                    logger.error("Unexpected error during streaming: %s", e)
+                    logger.error(
+                        "Unexpected error during pinned-document streaming: %s",
+                        e,
+                        exc_info=True,
+                    )
                     yield {
                         "event": "error",
                         "data": _collaborative_stream_error_message(),
