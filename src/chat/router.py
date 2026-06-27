@@ -3,13 +3,23 @@ import logging
 import threading
 from functools import lru_cache
 from typing import Any
+from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Body,
+    Depends,
+    Header,
+    HTTPException,
+    Request,
+)
 from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
 from src.chat.ingest import DocumentIngestService
 from src.chat.llm import BedrockClient
+from src.chat.models import DocumentRecord
 from src.chat.retriever import QdrantRetriever
 from src.chat.schemas import (
     ChatRequest,
@@ -248,6 +258,7 @@ async def chat_document_endpoint(
                         service.generate_response_stream_for_document(
                             chat_request.messages,
                             legislation_id=chat_request.resolved_legislation_id,
+                            domain=chat_request.domain,
                             title=chat_request.title,
                             conversation_id=chat_request.conversation_id,
                         )
@@ -286,6 +297,7 @@ async def chat_document_endpoint(
             service.generate_response_for_document(
                 chat_request.messages,
                 legislation_id=chat_request.resolved_legislation_id,
+                domain=chat_request.domain,
                 title=chat_request.title,
                 conversation_id=chat_request.conversation_id,
             )
@@ -459,6 +471,7 @@ def get_ingest_service_singleton() -> DocumentIngestService:
 async def ingest_document(
     ingest_request: DocumentIngestRequest,
     background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
     _auth: None = Depends(_verify_internal_key),
 ) -> IngestResponse:
     """
@@ -467,6 +480,24 @@ async def ingest_document(
     The heavy work (download → parse → chunk → embed → index) is dispatched
     as a background task so this endpoint returns **202 Accepted** immediately.
     """
+    # Persist (upsert) document metadata so retrigger calls can replay ingestion.
+    record = db.get(DocumentRecord, ingest_request.document_id)
+    if record is None:
+        record = DocumentRecord(
+            document_id=ingest_request.document_id,
+            legislation_id=ingest_request.legislation_id,
+            file_url=ingest_request.file_url,
+            title=ingest_request.title,
+            publication_date=ingest_request.publication_date,
+        )
+        db.add(record)
+    else:
+        record.legislation_id = ingest_request.legislation_id
+        record.file_url = ingest_request.file_url
+        record.title = ingest_request.title
+        record.publication_date = ingest_request.publication_date
+    db.commit()
+
     ingest_service = get_ingest_service_singleton()
 
     def _run() -> None:
@@ -493,6 +524,113 @@ async def ingest_document(
     return IngestResponse(
         status="accepted",
         message="Document queued for ingestion",
+        legislation_id=ingest_request.legislation_id,
+        document_id=ingest_request.document_id,
+    )
+
+
+@router.post(
+    "/upload/retrigger/{document_id}",
+    response_model=IngestResponse,
+    status_code=202,
+    summary="Delete existing Qdrant chunks for a document and re-trigger ingestion",
+)
+async def retrigger_ingest(
+    document_id: str,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    _auth: None = Depends(_verify_internal_key),
+    body: DocumentIngestRequest | None = Body(None),
+) -> IngestResponse:
+    """
+    Called by the KMS Go backend to re-index a document (e.g. after a failed
+    ingestion or a document replacement).
+
+    The request body is optional:
+    - If provided, the document metadata is saved/updated and used for ingestion.
+    - If absent, the metadata stored from the original /documents/ingest call is used.
+
+    Existing Qdrant points are deleted synchronously before the new ingestion
+    job is queued, preventing duplicate chunks.
+    """
+    try:
+        doc_uuid = UUID(document_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Invalid document_id UUID") from exc
+
+    if body is not None:
+        # Body provided: upsert the record so we always have up-to-date metadata.
+        if str(body.document_id) != document_id:
+            raise HTTPException(
+                status_code=422,
+                detail="Path document_id does not match body document_id",
+            )
+        record = db.get(DocumentRecord, doc_uuid)
+        if record is None:
+            record = DocumentRecord(
+                document_id=body.document_id,
+                legislation_id=body.legislation_id,
+                file_url=body.file_url,
+                title=body.title,
+                publication_date=body.publication_date,
+            )
+            db.add(record)
+        else:
+            record.legislation_id = body.legislation_id
+            record.file_url = body.file_url
+            record.title = body.title
+            record.publication_date = body.publication_date
+        db.commit()
+        ingest_request = body
+    else:
+        # No body: look up previously stored metadata.
+        record = db.get(DocumentRecord, doc_uuid)
+        if record is None:
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    f"No ingest record found for document_id={document_id}. "
+                    "Send the full document metadata in the request body to retrigger ingestion."
+                ),
+            )
+        ingest_request = DocumentIngestRequest(
+            document_id=record.document_id,
+            legislation_id=record.legislation_id,
+            file_url=record.file_url,
+            title=record.title,
+            publication_date=record.publication_date,
+        )
+
+    ingest_service = get_ingest_service_singleton()
+
+    # Remove stale chunks immediately so searches don't see old content while
+    # the background job is running.
+    ingest_service.delete_document_chunks(document_id)
+
+    def _run() -> None:
+        try:
+            result = ingest_service.ingest(ingest_request)
+            logger.info(
+                "Retrigger ingestion finished: legislation_id=%s document_id=%s result=%s",
+                ingest_request.legislation_id,
+                ingest_request.document_id,
+                result,
+            )
+        except Exception as exc:
+            logger.error(
+                "Retrigger ingestion failed: legislation_id=%s document_id=%s error=%s",
+                ingest_request.legislation_id,
+                ingest_request.document_id,
+                exc,
+                exc_info=True,
+            )
+            ingest_service._notify_kms(str(ingest_request.document_id), "failed")
+
+    background_tasks.add_task(_run)
+
+    return IngestResponse(
+        status="accepted",
+        message="Document re-queued for ingestion",
         legislation_id=ingest_request.legislation_id,
         document_id=ingest_request.document_id,
     )

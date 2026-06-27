@@ -1,9 +1,33 @@
 from datetime import datetime
-from uuid import UUID, uuid4
-from sqlalchemy import Column, String, DateTime, ForeignKey, Text, JSON
+from uuid import uuid4
+
+from sqlalchemy import JSON, Column, DateTime, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import relationship
+
 from src.core.database import Base
+
+
+class DocumentRecord(Base):
+    """Stores document ingest metadata so retrigger calls can replay ingestion."""
+
+    __tablename__ = "document_records"
+
+    document_id = Column(PGUUID(as_uuid=True), primary_key=True)
+    legislation_id = Column(PGUUID(as_uuid=True), nullable=False, index=True)
+    file_url = Column(Text, nullable=False)
+    title = Column(String, nullable=False)
+    publication_date = Column(String, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(
+        DateTime,
+        nullable=False,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
+
+    def __repr__(self):
+        return f"<DocumentRecord(document_id={self.document_id}, title={self.title})>"
 
 
 class User(Base):
@@ -17,12 +41,17 @@ class User(Base):
     username = Column(String, nullable=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at = Column(
-        DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow
+        DateTime,
+        nullable=False,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
     )
 
     # Relationships
     conversations = relationship(
-        "Conversation", back_populates="user", cascade="all, delete-orphan"
+        "Conversation",
+        back_populates="user",
+        cascade="all, delete-orphan",
     )
 
     def __repr__(self):
@@ -36,12 +65,18 @@ class Conversation(Base):
 
     id = Column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
     user_id = Column(
-        PGUUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True
+        PGUUID(as_uuid=True),
+        ForeignKey("users.id"),
+        nullable=False,
+        index=True,
     )
     title = Column(String, nullable=True)  # Auto-generated from first message
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at = Column(
-        DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow
+        DateTime,
+        nullable=False,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
     )
 
     # Relationships
@@ -64,12 +99,16 @@ class Message(Base):
 
     id = Column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
     conversation_id = Column(
-        PGUUID(as_uuid=True), ForeignKey("conversations.id"), nullable=False, index=True
+        PGUUID(as_uuid=True),
+        ForeignKey("conversations.id"),
+        nullable=False,
+        index=True,
     )
     role = Column(String, nullable=False)  # "user" or "assistant"
     content = Column(Text, nullable=False)
     message_metadata = Column(
-        JSON, nullable=True
+        JSON,
+        nullable=True,
     )  # Store sources, tokens, model info, etc.
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 

@@ -21,7 +21,13 @@ from typing import Any
 import httpx
 from pypdf import PdfReader
 from qdrant_client import QdrantClient
-from qdrant_client.models import PointStruct
+from qdrant_client.models import (
+    FieldCondition,
+    Filter,
+    FilterSelector,
+    MatchValue,
+    PointStruct,
+)
 
 from src.chat.llm import BedrockClient
 from src.chat.schemas import DocumentIngestRequest
@@ -159,6 +165,38 @@ class DocumentIngestService:
         self._notify_kms(str(req.document_id), "completed")
 
         return result
+
+    def delete_document_chunks(self, document_id: str) -> int:
+        """Delete all Qdrant points that belong to *document_id*.
+
+        Returns the number of points deleted (0 if none existed).
+        """
+        delete_filter = Filter(
+            must=[
+                FieldCondition(
+                    key="document_id",
+                    match=MatchValue(value=document_id),
+                ),
+            ],
+        )
+        # Count before deleting so we can return a meaningful number.
+        count_result = self.qdrant.count(
+            collection_name=self.collection_name,
+            count_filter=delete_filter,
+            exact=True,
+        )
+        deleted = count_result.count
+        if deleted > 0:
+            self.qdrant.delete(
+                collection_name=self.collection_name,
+                points_selector=FilterSelector(filter=delete_filter),
+            )
+            logger.info(
+                "Deleted %d existing Qdrant points for document_id=%s",
+                deleted,
+                document_id,
+            )
+        return deleted
 
     def _notify_kms(self, document_id: str, status: str) -> None:
         """PATCH the KMS ingest-status endpoint so the UI reflects the final state."""

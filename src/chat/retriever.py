@@ -311,6 +311,7 @@ class QdrantRetriever:
         self,
         document_id: str | None = None,
         legislation_id: str | None = None,
+        domain: str | None = None,
         title: str | None = None,
     ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         """
@@ -332,6 +333,7 @@ class QdrantRetriever:
                 self._retrieve_by_document_impl,
                 document_id,
                 legislation_id,
+                domain,
                 title,
             )
         except CircuitBreakerError as e:
@@ -345,22 +347,38 @@ class QdrantRetriever:
         self,
         document_id: str | None,
         legislation_id: str | None,
+        domain: str | None,
         title: str | None,
     ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         """Internal implementation of document-filtered scroll retrieval."""
         # The value actually used for the lookup, for diagnostics and logging.
         lookup_value = legislation_id or document_id or title
+        must_conditions = []
+        if domain:
+            must_conditions.append(
+                FieldCondition(
+                    key="domain",
+                    match=MatchValue(value=domain),
+                ),
+            )
+
         if legislation_id:
             # The frontend always sends the KMS UUID as document_id / legislation_id.
             # That UUID can live in different Qdrant fields depending on the pipeline:
             #   - Top-level legislation_id         → upload pipeline (/documents/ingest)
             #   - Top-level document_id (string)   → upload pipeline (legacy)
             #   - document_metadata.id             → bulk pipeline (primary KMS doc UUID)
+            #   - document_metadata.legislation_id → bulk pipeline (variant)
             # Use a should (OR) filter so all pipelines are covered.
             scroll_filter = Filter(
+                must=must_conditions,
                 should=[
                     FieldCondition(
-                        key="legislation_id",
+                        key="document_metadata_legislation_id",
+                        match=MatchValue(value=legislation_id),
+                    ),
+                    FieldCondition(
+                        key="document_id",
                         match=MatchValue(value=legislation_id),
                     ),
                     FieldCondition(
@@ -368,7 +386,7 @@ class QdrantRetriever:
                         match=MatchValue(value=legislation_id),
                     ),
                     FieldCondition(
-                        key="document_id",
+                        key="document_metadata_legislation_id",
                         match=MatchValue(value=legislation_id),
                     ),
                 ],
@@ -377,6 +395,7 @@ class QdrantRetriever:
             # Fallback used by general-chat history lookup (numeric IDs).
             scroll_filter = Filter(
                 must=[
+                    *must_conditions,
                     FieldCondition(
                         key="document_id",
                         match=MatchValue(value=document_id),
@@ -385,8 +404,13 @@ class QdrantRetriever:
             )
         elif title:
             scroll_filter = Filter(
-                must=[FieldCondition(key="title", match=MatchValue(value=title))],
+                must=[
+                    *must_conditions,
+                    FieldCondition(key="title", match=MatchValue(value=title)),
+                ],
             )
+        elif must_conditions:
+            scroll_filter = Filter(must=must_conditions)
         else:
             scroll_filter = None
 
@@ -454,8 +478,20 @@ class QdrantRetriever:
                     },
                 )
 
-        # Sort by chunk_id to preserve logical reading order
-        results.sort(key=lambda x: x.get("chunk_id") or "")
+        # Sort by chunk_id to preserve logical reading order.
+        # Normalize to a comparable key because payloads can mix ints and strings.
+        def _chunk_sort_key(item: dict[str, Any]) -> tuple[int, Any]:
+            chunk_id = item.get("chunk_id")
+            if chunk_id is None:
+                return (2, "")
+
+            text_value = str(chunk_id)
+            if text_value.isdigit():
+                return (0, int(text_value))
+
+            return (1, text_value)
+
+        results.sort(key=_chunk_sort_key)
 
         diagnostics = {
             "retrieved_k": len(results),
@@ -464,6 +500,7 @@ class QdrantRetriever:
             "pinned_document": True,
             "pinned_document_id": lookup_value,
             "pinned_legislation_id": legislation_id,
+            "pinned_domain": domain,
             "pinned_title": title,
             "source_priority": {
                 "company_docs": sum(

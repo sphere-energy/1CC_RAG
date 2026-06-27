@@ -1265,6 +1265,7 @@ class ChatService:
         self,
         messages: list[Message],
         legislation_id: str | None = None,
+        domain: str | None = None,
         title: str | None = None,
         conversation_id: UUID | None = None,
     ) -> tuple[str, UUID, UUID, dict[str, Any]]:
@@ -1313,6 +1314,7 @@ class ChatService:
         try:
             context_docs, retrieval_diagnostics = self.retriever.retrieve_by_document(
                 legislation_id=legislation_id,
+                domain=domain,
                 title=title,
             )
         except QdrantException as exc:
@@ -1485,6 +1487,7 @@ class ChatService:
         self,
         messages: list[Message],
         legislation_id: str | None = None,
+        domain: str | None = None,
         title: str | None = None,
         conversation_id: UUID | None = None,
     ) -> tuple[Iterator[dict[str, str]], UUID]:
@@ -1523,6 +1526,7 @@ class ChatService:
         try:
             context_docs, retrieval_diagnostics = self.retriever.retrieve_by_document(
                 legislation_id=legislation_id,
+                domain=domain,
                 title=title,
             )
         except QdrantException as exc:

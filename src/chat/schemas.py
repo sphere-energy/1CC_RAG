@@ -125,12 +125,16 @@ class DocumentChatRequest(BaseModel):
         None,
         description="Retrieve chunks only from the document with this exact title",
     )
+    domain: str | None = Field(
+        "legal",
+        description="Exact-match domain filter for pinned-document retrieval. Defaults to 'legal'.",
+    )
 
     @model_validator(mode="after")
     def at_least_one_filter(self) -> "DocumentChatRequest":
         if not self.legislation_id and not self.document_id and not self.title:
             raise ValueError(
-                "At least one of legislation_id, document_id, or title must be provided"
+                "At least one of legislation_id, document_id, or title must be provided",
             )
         return self
 
