@@ -295,7 +295,7 @@ class QdrantRetriever:
             text = (doc.get("text") or "").lower()
             lexical_hits = sum(1 for term in query_terms if term in text)
             source_boost = self._source_priority_boost(
-                str(doc.get("source_kind") or "")
+                str(doc.get("source_kind") or ""),
             )
             hybrid_score = (
                 float(doc.get("score", 0.0)) + (0.03 * lexical_hits) + source_boost
@@ -346,10 +346,13 @@ class QdrantRetriever:
         """Internal implementation of document-filtered scroll retrieval."""
         conditions = []
         if document_id:
+            # document_id is a unique identifier — use it exclusively and ignore title
+            # to avoid AND-filtering on title mismatches that drop all results.
             conditions.append(
                 FieldCondition(key="document_id", match=MatchValue(value=document_id)),
             )
-        if title:
+        elif title:
+            # Fall back to title-only filter when no document_id is available
             conditions.append(
                 FieldCondition(key="title", match=MatchValue(value=title)),
             )
