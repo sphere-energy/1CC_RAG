@@ -75,10 +75,16 @@ class DocumentIngestService:
         full_text = "\n\n".join(pages)
 
         if not full_text.strip():
+            # A PDF with no extractable text (e.g. scanned/image-only) cannot be
+            # indexed. Raise so the background task handler marks ingestion as
+            # failed and notifies KMS, instead of silently returning zero chunks.
             logger.warning(
-                "No extractable text found in PDF (document_id=%s)", req.document_id
+                "No extractable text found in PDF (document_id=%s)",
+                req.document_id,
             )
-            return {"total_points": 0, "macro_count": 0}
+            raise ValueError(
+                f"No extractable text found in PDF (document_id={req.document_id})",
+            )
 
         # 3. Build chunk hierarchy.
         macro_groups = self._build_macro_chunks(full_text)
@@ -108,7 +114,7 @@ class DocumentIngestService:
                         "chunk_id": macro_id,
                         "children": child_ids,
                     },
-                )
+                ),
             )
 
             for idx, (micro_text, micro_id) in enumerate(micro_pairs):
@@ -130,7 +136,7 @@ class DocumentIngestService:
                             "prev_chunk_id": prev_id,
                             "next_chunk_id": next_id,
                         },
-                    )
+                    ),
                 )
 
         # 5. Upsert into Qdrant in batches to stay within payload limits.
@@ -218,7 +224,9 @@ class DocumentIngestService:
                 continue
             macro_id = str(uuid.uuid4())
             raw_micros = self._split_text(
-                macro_text, MICRO_TARGET_CHARS, MICRO_OVERLAP_CHARS
+                macro_text,
+                MICRO_TARGET_CHARS,
+                MICRO_OVERLAP_CHARS,
             )
             micro_pairs = [(mt, str(uuid.uuid4())) for mt in raw_micros if mt.strip()]
             macro_groups.append((macro_text, macro_id, micro_pairs))

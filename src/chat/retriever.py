@@ -348,6 +348,8 @@ class QdrantRetriever:
         title: str | None,
     ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         """Internal implementation of document-filtered scroll retrieval."""
+        # The value actually used for the lookup, for diagnostics and logging.
+        lookup_value = legislation_id or document_id or title
         if legislation_id:
             # The frontend always sends the KMS UUID as document_id / legislation_id.
             # That UUID can live in different Qdrant fields depending on the pipeline:
@@ -433,7 +435,8 @@ class QdrantRetriever:
             "rerank_scores": [],
             "citation_coverage": 1.0 if results else 0.0,
             "pinned_document": True,
-            "pinned_document_id": document_id,
+            "pinned_document_id": lookup_value,
+            "pinned_legislation_id": legislation_id,
             "pinned_title": title,
             "source_priority": {
                 "company_docs": sum(
@@ -448,9 +451,9 @@ class QdrantRetriever:
             },
         }
         logger.info(
-            "Retrieved %d chunks for document (id=%s, title=%s)",
+            "Retrieved %d chunks for pinned document (lookup=%s, title=%s)",
             len(results),
-            document_id,
+            lookup_value,
             title,
         )
         return results, diagnostics
