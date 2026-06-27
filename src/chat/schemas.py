@@ -81,15 +81,18 @@ class ConversationListResponse(BaseModel):
 
 class DocumentIngestRequest(BaseModel):
     legislation_id: UUID = Field(
-        ..., description="UUID of the legislation record in KMS"
+        ...,
+        description="UUID of the legislation record in KMS",
     )
     document_id: UUID = Field(..., description="UUID of the document metadata record")
     file_url: str = Field(
-        ..., description="Presigned or public URL to download the PDF"
+        ...,
+        description="Presigned or public URL to download the PDF",
     )
     title: str = Field(..., description="Human-readable title of the document")
     publication_date: str | None = Field(
-        None, description="ISO date string, e.g. '2024-01-15'"
+        None,
+        description="ISO date string, e.g. '2024-01-15'",
     )
 
 
@@ -110,9 +113,13 @@ class DocumentChatRequest(BaseModel):
         description="A list of messages in the conversation",
     )
     stream: bool = Field(False, description="Whether to stream the response")
+    legislation_id: str | None = Field(
+        None,
+        description="Retrieve chunks only from the document with this exact legislation_id",
+    )
     document_id: str | None = Field(
         None,
-        description="Retrieve chunks only from the document with this exact document_id",
+        description="Alias for legislation_id (legacy). Ignored when legislation_id is also provided.",
     )
     title: str | None = Field(
         None,
@@ -121,9 +128,16 @@ class DocumentChatRequest(BaseModel):
 
     @model_validator(mode="after")
     def at_least_one_filter(self) -> "DocumentChatRequest":
-        if not self.document_id and not self.title:
-            raise ValueError("At least one of document_id or title must be provided")
+        if not self.legislation_id and not self.document_id and not self.title:
+            raise ValueError(
+                "At least one of legislation_id, document_id, or title must be provided"
+            )
         return self
+
+    @property
+    def resolved_legislation_id(self) -> str | None:
+        """Return legislation_id if set, otherwise fall back to document_id."""
+        return self.legislation_id or self.document_id
 
 
 class ConversationRenameRequest(BaseModel):

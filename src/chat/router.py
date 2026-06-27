@@ -247,7 +247,7 @@ async def chat_document_endpoint(
                     stream_gen, conversation_id = (
                         service.generate_response_stream_for_document(
                             chat_request.messages,
-                            document_id=chat_request.document_id,
+                            legislation_id=chat_request.resolved_legislation_id,
                             title=chat_request.title,
                             conversation_id=chat_request.conversation_id,
                         )
@@ -277,7 +277,7 @@ async def chat_document_endpoint(
         response_text, conversation_id, message_id, metadata = (
             service.generate_response_for_document(
                 chat_request.messages,
-                document_id=chat_request.document_id,
+                legislation_id=chat_request.resolved_legislation_id,
                 title=chat_request.title,
                 conversation_id=chat_request.conversation_id,
             )
@@ -425,12 +425,13 @@ def _verify_internal_key(
     expected = settings.ingest_internal_api_key
     if not expected:
         logger.warning(
-            "INGEST_INTERNAL_API_KEY is not set — ingest endpoint is unprotected"
+            "INGEST_INTERNAL_API_KEY is not set — ingest endpoint is unprotected",
         )
         return
     if not x_internal_api_key or x_internal_api_key != expected:
         raise HTTPException(
-            status_code=401, detail="Invalid or missing internal API key"
+            status_code=401,
+            detail="Invalid or missing internal API key",
         )
 
 

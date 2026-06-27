@@ -310,14 +310,16 @@ class QdrantRetriever:
     def retrieve_by_document(
         self,
         document_id: str | None = None,
+        legislation_id: str | None = None,
         title: str | None = None,
     ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         """
         Retrieve all chunks for a specific document using filter-based scroll (no vector similarity).
 
         Args:
-            document_id: Filter chunks by exact document_id value.
-            title: Filter chunks by exact title value.
+            document_id: Filter chunks by exact document_id value (used by general-chat fallback).
+            legislation_id: Filter chunks by exact legislation_id value (used by pinned-document chat).
+            title: Filter chunks by exact title value (fallback when no id is available).
 
         Returns:
             Tuple of (list of chunk dicts, diagnostics dict).
@@ -329,6 +331,7 @@ class QdrantRetriever:
             return self.breaker.call(
                 self._retrieve_by_document_impl,
                 document_id,
+                legislation_id,
                 title,
             )
         except CircuitBreakerError as e:
@@ -341,18 +344,25 @@ class QdrantRetriever:
     def _retrieve_by_document_impl(
         self,
         document_id: str | None,
+        legislation_id: str | None,
         title: str | None,
     ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         """Internal implementation of document-filtered scroll retrieval."""
         conditions = []
-        if document_id:
-            # document_id is a unique identifier — use it exclusively and ignore title
-            # to avoid AND-filtering on title mismatches that drop all results.
+        if legislation_id:
+            # legislation_id is the primary identifier for pinned-document chat.
+            conditions.append(
+                FieldCondition(
+                    key="legislation_id", match=MatchValue(value=legislation_id)
+                ),
+            )
+        elif document_id:
+            # document_id fallback used by general-chat history lookup.
             conditions.append(
                 FieldCondition(key="document_id", match=MatchValue(value=document_id)),
             )
         elif title:
-            # Fall back to title-only filter when no document_id is available
+            # Last-resort fallback when no id is available.
             conditions.append(
                 FieldCondition(key="title", match=MatchValue(value=title)),
             )

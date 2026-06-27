@@ -650,7 +650,9 @@ class ChatService:
         return doc_ids
 
     def _build_retrieval_query(
-        self, messages: list[Message], is_follow_up: bool
+        self,
+        messages: list[Message],
+        is_follow_up: bool,
     ) -> str:
         """Enrich the retrieval query for follow-up turns with recent conversation context.
 
@@ -743,7 +745,8 @@ class ChatService:
         retrieval_query = self._build_retrieval_query(messages, is_follow_up)
         try:
             query_embedding = self.llm_client.generate_embedding(
-                retrieval_query, input_type="search_query"
+                retrieval_query,
+                input_type="search_query",
             )
             context_docs, retrieval_diagnostics = self.retriever.retrieve(
                 query_embedding,
@@ -759,7 +762,8 @@ class ChatService:
             and self.settings.retrieval_relevance_gate_enabled
         ):
             best_score = max(
-                (doc.get("score") or 0.0 for doc in context_docs), default=0.0
+                (doc.get("score") or 0.0 for doc in context_docs),
+                default=0.0,
             )
             if best_score < self.settings.retrieval_min_score:
                 logger.info(
@@ -789,7 +793,7 @@ class ChatService:
             for doc_id in prev_doc_ids[:3]:
                 try:
                     fallback_docs, _ = self.retriever.retrieve_by_document(
-                        document_id=doc_id
+                        document_id=doc_id,
                     )
                     if fallback_docs:
                         context_docs = fallback_docs
@@ -940,7 +944,8 @@ class ChatService:
         # Update conversation title from first message if not set
         if not conversation.title and len(messages) == 1:
             conversation.title = self._generate_conversation_title(
-                user_query, response_text
+                user_query,
+                response_text,
             )
 
         # Always update timestamp so conversations sort by last activity
@@ -1003,7 +1008,8 @@ class ChatService:
         retrieval_query = self._build_retrieval_query(messages, is_follow_up)
         try:
             query_embedding = self.llm_client.generate_embedding(
-                retrieval_query, input_type="search_query"
+                retrieval_query,
+                input_type="search_query",
             )
             context_docs, retrieval_diagnostics = self.retriever.retrieve(
                 query_embedding,
@@ -1022,7 +1028,8 @@ class ChatService:
             and self.settings.retrieval_relevance_gate_enabled
         ):
             best_score = max(
-                (doc.get("score") or 0.0 for doc in context_docs), default=0.0
+                (doc.get("score") or 0.0 for doc in context_docs),
+                default=0.0,
             )
             if best_score < self.settings.retrieval_min_score:
                 logger.info(
@@ -1052,7 +1059,7 @@ class ChatService:
             for doc_id in prev_doc_ids[:3]:
                 try:
                     fallback_docs, _ = self.retriever.retrieve_by_document(
-                        document_id=doc_id
+                        document_id=doc_id,
                     )
                     if fallback_docs:
                         context_docs = fallback_docs
@@ -1129,7 +1136,7 @@ class ChatService:
                             "no_context_reason": no_context_reason_val,
                             "sources": [],
                             "conversation_title": conversation.title,
-                        }
+                        },
                     ),
                 }
 
@@ -1177,7 +1184,8 @@ class ChatService:
         def stream_and_save() -> Iterator[dict[str, str]]:
             yield {"event": "progress", "data": "retrieval_complete"}
             for chunk in self.llm_client.generate_text_stream(
-                prompt, temperature=temperature
+                prompt,
+                temperature=temperature,
             ):
                 accumulated_response.append(chunk)
                 yield {"event": "data", "data": chunk}
@@ -1245,7 +1253,8 @@ class ChatService:
 
             if not conversation.title and len(messages) == 1:
                 conversation.title = self._generate_conversation_title(
-                    user_query, full_response
+                    user_query,
+                    full_response,
                 )
                 conversation.updated_at = datetime.utcnow()
                 self.db.commit()
@@ -1255,7 +1264,7 @@ class ChatService:
     def generate_response_for_document(
         self,
         messages: list[Message],
-        document_id: str | None = None,
+        legislation_id: str | None = None,
         title: str | None = None,
         conversation_id: UUID | None = None,
     ) -> tuple[str, UUID, UUID, dict[str, Any]]:
@@ -1265,7 +1274,7 @@ class ChatService:
 
         Args:
             messages: Conversation history.
-            document_id: Exact document_id to filter chunks by.
+            legislation_id: Exact legislation_id to filter chunks by.
             title: Exact title to filter chunks by.
             conversation_id: Optional conversation ID to continue.
 
@@ -1273,8 +1282,8 @@ class ChatService:
             tuple of (response_text, conversation_id, message_id, metadata).
         """
         logger.info(
-            "Processing pinned-document chat request (document_id=%s, title=%s)",
-            document_id,
+            "Processing pinned-document chat request (legislation_id=%s, title=%s)",
+            legislation_id,
             title,
         )
 
@@ -1303,7 +1312,7 @@ class ChatService:
 
         try:
             context_docs, retrieval_diagnostics = self.retriever.retrieve_by_document(
-                document_id=document_id,
+                legislation_id=legislation_id,
                 title=title,
             )
         except QdrantException as exc:
@@ -1315,9 +1324,9 @@ class ChatService:
 
         if not context_docs and retrieval_error is None:
             logger.warning(
-                "Pinned-document: no Qdrant chunks found (document_id=%s title=%s) — "
+                "Pinned-document: no Qdrant chunks found (legislation_id=%s title=%s) — "
                 "returning not-indexed message without calling LLM",
-                document_id,
+                legislation_id,
                 title,
             )
             response_text = self._not_indexed_message()
@@ -1426,7 +1435,8 @@ class ChatService:
 
         if not conversation.title and len(messages) == 1:
             conversation.title = self._generate_conversation_title(
-                user_query, response_text
+                user_query,
+                response_text,
             )
 
         conversation.updated_at = datetime.utcnow()
@@ -1439,7 +1449,7 @@ class ChatService:
     def generate_response_stream_for_document(
         self,
         messages: list[Message],
-        document_id: str | None = None,
+        legislation_id: str | None = None,
         title: str | None = None,
         conversation_id: UUID | None = None,
     ) -> tuple[Iterator[dict[str, str]], UUID]:
@@ -1448,8 +1458,8 @@ class ChatService:
         Uses ONLY chunks from the pinned document — no vector similarity search.
         """
         logger.info(
-            "Processing streaming pinned-document chat request (document_id=%s, title=%s)",
-            document_id,
+            "Processing streaming pinned-document chat request (legislation_id=%s, title=%s)",
+            legislation_id,
             title,
         )
 
@@ -1477,7 +1487,7 @@ class ChatService:
 
         try:
             context_docs, retrieval_diagnostics = self.retriever.retrieve_by_document(
-                document_id=document_id,
+                legislation_id=legislation_id,
                 title=title,
             )
         except QdrantException as exc:
@@ -1489,9 +1499,9 @@ class ChatService:
 
         if not context_docs and retrieval_error is None:
             logger.warning(
-                "Streaming pinned-document: no Qdrant chunks (document_id=%s title=%s) — "
+                "Streaming pinned-document: no Qdrant chunks (legislation_id=%s title=%s) — "
                 "returning not-indexed message without calling LLM",
-                document_id,
+                legislation_id,
                 title,
             )
             not_indexed_msg = self._not_indexed_message()
@@ -1529,7 +1539,7 @@ class ChatService:
                             "no_context_reason": "pinned_filter_no_hits",
                             "sources": [],
                             "conversation_title": conversation.title,
-                        }
+                        },
                     ),
                 }
 
@@ -1575,7 +1585,8 @@ class ChatService:
         def stream_and_save() -> Iterator[dict[str, str]]:
             yield {"event": "progress", "data": "retrieval_complete"}
             for chunk in self.llm_client.generate_text_stream(
-                prompt, temperature=temperature
+                prompt,
+                temperature=temperature,
             ):
                 accumulated_response.append(chunk)
                 yield {"event": "data", "data": chunk}
@@ -1643,7 +1654,8 @@ class ChatService:
 
             if not conversation.title and len(messages) == 1:
                 conversation.title = self._generate_conversation_title(
-                    user_query, full_response
+                    user_query,
+                    full_response,
                 )
                 conversation.updated_at = datetime.utcnow()
                 self.db.commit()
