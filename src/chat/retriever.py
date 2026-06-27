@@ -348,26 +348,40 @@ class QdrantRetriever:
         title: str | None,
     ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         """Internal implementation of document-filtered scroll retrieval."""
-        conditions = []
         if legislation_id:
-            # legislation_id is the primary identifier for pinned-document chat.
-            conditions.append(
-                FieldCondition(
-                    key="legislation_id", match=MatchValue(value=legislation_id)
-                ),
+            # Pinned-document chat: the UUID the frontend sends is stored in two
+            # possible locations depending on the ingestion pipeline:
+            #   - Bulk pipeline: document_metadata.id  (nested JSON path)
+            #   - Upload pipeline (/documents/ingest): document_id  (top-level)
+            # Use a should (OR) filter so both pipelines are covered.
+            scroll_filter = Filter(
+                should=[
+                    FieldCondition(
+                        key="document_metadata.id",
+                        match=MatchValue(value=legislation_id),
+                    ),
+                    FieldCondition(
+                        key="document_id",
+                        match=MatchValue(value=legislation_id),
+                    ),
+                ],
             )
         elif document_id:
-            # document_id fallback used by general-chat history lookup.
-            conditions.append(
-                FieldCondition(key="document_id", match=MatchValue(value=document_id)),
+            # Fallback used by general-chat history lookup (numeric IDs).
+            scroll_filter = Filter(
+                must=[
+                    FieldCondition(
+                        key="document_id",
+                        match=MatchValue(value=document_id),
+                    ),
+                ],
             )
         elif title:
-            # Last-resort fallback when no id is available.
-            conditions.append(
-                FieldCondition(key="title", match=MatchValue(value=title)),
+            scroll_filter = Filter(
+                must=[FieldCondition(key="title", match=MatchValue(value=title))],
             )
-
-        scroll_filter = Filter(must=conditions) if conditions else None
+        else:
+            scroll_filter = None
 
         all_records = []
         next_page_offset = None
