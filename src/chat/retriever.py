@@ -349,13 +349,18 @@ class QdrantRetriever:
     ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         """Internal implementation of document-filtered scroll retrieval."""
         if legislation_id:
-            # Pinned-document chat: the UUID the frontend sends is stored in two
-            # possible locations depending on the ingestion pipeline:
-            #   - Bulk pipeline: document_metadata.id  (nested JSON path)
-            #   - Upload pipeline (/documents/ingest): document_id  (top-level)
-            # Use a should (OR) filter so both pipelines are covered.
+            # The frontend always sends the KMS UUID as document_id / legislation_id.
+            # That UUID can live in different Qdrant fields depending on the pipeline:
+            #   - Top-level legislation_id         → upload pipeline (/documents/ingest)
+            #   - Top-level document_id (string)   → upload pipeline (legacy)
+            #   - document_metadata.id             → bulk pipeline (primary KMS doc UUID)
+            # Use a should (OR) filter so all pipelines are covered.
             scroll_filter = Filter(
                 should=[
+                    FieldCondition(
+                        key="legislation_id",
+                        match=MatchValue(value=legislation_id),
+                    ),
                     FieldCondition(
                         key="document_metadata.id",
                         match=MatchValue(value=legislation_id),
