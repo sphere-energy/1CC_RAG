@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     )
     bedrock_text_model_id: str = (
         "arn:aws:bedrock:eu-central-1:407179558514:"
-        "inference-profile/eu.anthropic.claude-3-5-sonnet-20240620-v1:0"
+        "inference-profile/eu.anthropic.claude-4-5-sonnet-20240620-v1:0"
     )
 
     # AWS Cognito Configuration

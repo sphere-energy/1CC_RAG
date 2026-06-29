@@ -125,6 +125,14 @@ class DocumentChatRequest(BaseModel):
         None,
         description="Retrieve chunks only from the document with this exact title",
     )
+    legislation_ids: list[str] | None = Field(
+        None,
+        description="Retrieve chunks from several documents (by legislation_id) to compare them. Takes precedence over legislation_id.",
+    )
+    titles: list[str] | None = Field(
+        None,
+        description="Retrieve chunks from several documents (by title) to compare them. Used when ids are unavailable.",
+    )
     domain: str | None = Field(
         "legal",
         description="Exact-match domain filter for pinned-document retrieval. Defaults to 'legal'.",
@@ -132,9 +140,15 @@ class DocumentChatRequest(BaseModel):
 
     @model_validator(mode="after")
     def at_least_one_filter(self) -> "DocumentChatRequest":
-        if not self.legislation_id and not self.document_id and not self.title:
+        if (
+            not self.legislation_id
+            and not self.document_id
+            and not self.title
+            and not self.legislation_ids
+            and not self.titles
+        ):
             raise ValueError(
-                "At least one of legislation_id, document_id, or title must be provided",
+                "At least one of legislation_id, document_id, title, legislation_ids, or titles must be provided",
             )
         return self
 
@@ -142,6 +156,14 @@ class DocumentChatRequest(BaseModel):
     def resolved_legislation_id(self) -> str | None:
         """Return legislation_id if set, otherwise fall back to document_id."""
         return self.legislation_id or self.document_id
+
+    @property
+    def is_comparison(self) -> bool:
+        """True when more than one document is pinned (comparison mode)."""
+        return bool(
+            (self.legislation_ids and len(self.legislation_ids) > 1)
+            or (self.titles and len(self.titles) > 1),
+        )
 
 
 class ConversationRenameRequest(BaseModel):

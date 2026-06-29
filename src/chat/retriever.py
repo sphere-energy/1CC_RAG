@@ -120,7 +120,7 @@ class QdrantRetriever:
 
             # Format results
             results = []
-            for p in sorted_points[:10]:  # Limit to top 10 unique results
+            for p in sorted_points[:30]:  # Limit to top 30 unique results
                 if p.payload:
                     score = getattr(p, "score", 0.0) or 0.0
                     results.append(
@@ -313,6 +313,8 @@ class QdrantRetriever:
         legislation_id: str | None = None,
         domain: str | None = None,
         title: str | None = None,
+        legislation_ids: list[str] | None = None,
+        titles: list[str] | None = None,
     ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         """
         Retrieve all chunks for a specific document using filter-based scroll (no vector similarity).
@@ -321,6 +323,8 @@ class QdrantRetriever:
             document_id: Filter chunks by exact document_id value (used by general-chat fallback).
             legislation_id: Filter chunks by exact legislation_id value (used by pinned-document chat).
             title: Filter chunks by exact title value (fallback when no id is available).
+            legislation_ids: Filter chunks by any of several legislation_ids (used for multi-document comparison).
+            titles: Filter chunks by any of several titles (used for multi-document comparison).
 
         Returns:
             Tuple of (list of chunk dicts, diagnostics dict).
@@ -335,6 +339,8 @@ class QdrantRetriever:
                 legislation_id,
                 domain,
                 title,
+                legislation_ids,
+                titles,
             )
         except CircuitBreakerError as e:
             logger.error("Circuit breaker open for Qdrant: %s", e)
@@ -349,10 +355,16 @@ class QdrantRetriever:
         legislation_id: str | None,
         domain: str | None,
         title: str | None,
+        legislation_ids: list[str] | None = None,
+        titles: list[str] | None = None,
     ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         """Internal implementation of document-filtered scroll retrieval."""
         # The value actually used for the lookup, for diagnostics and logging.
         lookup_value = legislation_id or document_id or title
+        if legislation_ids:
+            lookup_value = ",".join(legislation_ids)
+        elif titles:
+            lookup_value = ",".join(titles)
         must_conditions = []
         if domain:
             must_conditions.append(
@@ -362,7 +374,39 @@ class QdrantRetriever:
                 ),
             )
 
-        if legislation_id:
+        if legislation_ids:
+            # Multi-document comparison: match chunks belonging to ANY of the pinned ids.
+            # Each id can live in different Qdrant fields depending on the pipeline, so we
+            # OR a MatchAny across every known field.
+            scroll_filter = Filter(
+                must=must_conditions,
+                should=[
+                    FieldCondition(
+                        key="legislation_id",
+                        match=MatchAny(any=legislation_ids),
+                    ),
+                    FieldCondition(
+                        key="document_id",
+                        match=MatchAny(any=legislation_ids),
+                    ),
+                    FieldCondition(
+                        key="document_metadata.id",
+                        match=MatchAny(any=legislation_ids),
+                    ),
+                    FieldCondition(
+                        key="document_metadata.legislation_id",
+                        match=MatchAny(any=legislation_ids),
+                    ),
+                ],
+            )
+        elif titles:
+            scroll_filter = Filter(
+                must=[
+                    *must_conditions,
+                    FieldCondition(key="title", match=MatchAny(any=titles)),
+                ],
+            )
+        elif legislation_id:
             # The frontend always sends the KMS UUID as document_id / legislation_id.
             # That UUID can live in different Qdrant fields depending on the pipeline:
             #   - Top-level legislation_id         → upload pipeline (/documents/ingest)
@@ -374,7 +418,7 @@ class QdrantRetriever:
                 must=must_conditions,
                 should=[
                     FieldCondition(
-                        key="document_metadata_legislation_id",
+                        key="legislation_id",
                         match=MatchValue(value=legislation_id),
                     ),
                     FieldCondition(
@@ -386,7 +430,7 @@ class QdrantRetriever:
                         match=MatchValue(value=legislation_id),
                     ),
                     FieldCondition(
-                        key="document_metadata_legislation_id",
+                        key="document_metadata.legislation_id",
                         match=MatchValue(value=legislation_id),
                     ),
                 ],
@@ -465,6 +509,9 @@ class QdrantRetriever:
                         "text": record.payload.get("text", ""),
                         "title": record.payload.get("title"),
                         "document_id": record.payload.get("document_id"),
+                        "legislation_id": record.payload.get("legislation_id")
+                        or (record.payload.get("document_metadata") or {}).get("id")
+                        or record.payload.get("document_id"),
                         "publication_date": record.payload.get("publication_date"),
                         "chunk_level": record.payload.get("chunk_level"),
                         "chunk_id": record.payload.get("chunk_id"),

@@ -261,6 +261,8 @@ async def chat_document_endpoint(
                             domain=chat_request.domain,
                             title=chat_request.title,
                             conversation_id=chat_request.conversation_id,
+                            legislation_ids=chat_request.legislation_ids,
+                            titles=chat_request.titles,
                         )
                     )
                     yield {"event": "conversation_id", "data": str(conversation_id)}
@@ -300,6 +302,8 @@ async def chat_document_endpoint(
                 domain=chat_request.domain,
                 title=chat_request.title,
                 conversation_id=chat_request.conversation_id,
+                legislation_ids=chat_request.legislation_ids,
+                titles=chat_request.titles,
             )
         )
         return ChatResponse(

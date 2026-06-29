@@ -374,8 +374,11 @@ class ChatService:
 
     def _classify_intent(self, user_query: str) -> str:
         query = user_query.lower()
-        if any(token in query for token in ["compare", "difference between", "vs "]):
-            return "procedural_guidance"
+        if any(
+            token in query
+            for token in ["compare", "difference between", "vs ", "versus", "differ"]
+        ):
+            return "comparison"
         if any(
             token in query for token in ["follow up", "as above", "continue", "clarify"]
         ):
@@ -451,10 +454,7 @@ class ChatService:
     def _validate_output(self, text: str) -> str:
         cleaned = text.strip()
         if not cleaned:
-            return (
-                "Here is the best guidance I can provide right now based on the available context. "
-                "If you share the exact document title or a short excerpt, I can refine this further."
-            )
+            return "I could not find an answer to that in the available material."
         return cleaned
 
     @staticmethod
@@ -500,12 +500,7 @@ class ChatService:
         response_text: str,
         has_sources: bool,
     ) -> str:
-        if has_sources:
-            return response_text
-        return (
-            f"{response_text}\n\n"
-            "To improve precision, share the exact document title, section, or a short excerpt and I will refine the answer."
-        )
+        return response_text
 
     def _resolve_no_context_reason(
         self,
@@ -692,7 +687,10 @@ class ChatService:
         Legal and procedural answers must stay close to the source text, so we use a
         lower temperature.  General document Q&A allows a little more latitude.
         """
-        if document_profile == "legal_regulatory" or intent == "procedural_guidance":
+        if document_profile == "legal_regulatory" or intent in (
+            "procedural_guidance",
+            "comparison",
+        ):
             return 0.2
         return 0.4
 
@@ -1268,9 +1266,11 @@ class ChatService:
         domain: str | None = None,
         title: str | None = None,
         conversation_id: UUID | None = None,
+        legislation_ids: list[str] | None = None,
+        titles: list[str] | None = None,
     ) -> tuple[str, UUID, UUID, dict[str, Any]]:
         """
-        Generate a RAG response using ONLY the chunks from the pinned document.
+        Generate a RAG response using ONLY the chunks from the pinned document(s).
         Skips vector similarity search entirely — retrieval is filter-based.
 
         Args:
@@ -1278,14 +1278,21 @@ class ChatService:
             legislation_id: Exact legislation_id to filter chunks by.
             title: Exact title to filter chunks by.
             conversation_id: Optional conversation ID to continue.
+            legislation_ids: Multiple legislation_ids to compare across documents.
+            titles: Multiple titles to compare across documents.
 
         Returns:
             tuple of (response_text, conversation_id, message_id, metadata).
         """
+        is_comparison = bool(
+            (legislation_ids and len(legislation_ids) > 1)
+            or (titles and len(titles) > 1),
+        )
         logger.info(
-            "Processing pinned-document chat request (legislation_id=%s, title=%s)",
+            "Processing pinned-document chat request (legislation_id=%s, title=%s, comparison=%s)",
             legislation_id,
             title,
+            is_comparison,
         )
 
         conversation = self._resolve_conversation(conversation_id)
@@ -1300,6 +1307,8 @@ class ChatService:
 
         user_query = messages[-1].content
         intent = self._classify_intent(user_query)
+        if is_comparison:
+            intent = "comparison"
         # Never short-circuit for out_of_domain — user explicitly pinned a document
 
         context_docs: list[dict[str, Any]] = []
@@ -1316,6 +1325,8 @@ class ChatService:
                 legislation_id=legislation_id,
                 domain=domain,
                 title=title,
+                legislation_ids=legislation_ids,
+                titles=titles,
             )
         except QdrantException as exc:
             retrieval_error = exc
@@ -1395,7 +1406,11 @@ class ChatService:
                 degraded_metadata,
             )
 
-        formatted_context = self._format_context(context_docs)
+        formatted_context = (
+            self._format_context_grouped(context_docs)
+            if is_comparison
+            else self._format_context(context_docs)
+        )
         document_profile = self._infer_document_profile(context_docs, intent)
         prompt = self._construct_prompt(
             messages,
@@ -1412,6 +1427,16 @@ class ChatService:
             response_text,
             has_sources=bool(context_docs),
         )
+
+        requested_doc_count = len(legislation_ids or titles or [])
+        distinct_doc_count = self._distinct_document_count(context_docs)
+        if is_comparison and distinct_doc_count < requested_doc_count:
+            response_text = (
+                f"> **Note:** Only {distinct_doc_count} distinct document(s) were found for "
+                f"the {requested_doc_count} you selected — the others appear to be duplicates "
+                "or share the same indexed content, so there is nothing to compare.\n\n"
+                + response_text
+            )
 
         sources = [
             {
@@ -1490,15 +1515,22 @@ class ChatService:
         domain: str | None = None,
         title: str | None = None,
         conversation_id: UUID | None = None,
+        legislation_ids: list[str] | None = None,
+        titles: list[str] | None = None,
     ) -> tuple[Iterator[dict[str, str]], UUID]:
         """
         Streaming variant of generate_response_for_document.
-        Uses ONLY chunks from the pinned document — no vector similarity search.
+        Uses ONLY chunks from the pinned document(s) — no vector similarity search.
         """
+        is_comparison = bool(
+            (legislation_ids and len(legislation_ids) > 1)
+            or (titles and len(titles) > 1),
+        )
         logger.info(
-            "Processing streaming pinned-document chat request (legislation_id=%s, title=%s)",
+            "Processing streaming pinned-document chat request (legislation_id=%s, title=%s, comparison=%s)",
             legislation_id,
             title,
+            is_comparison,
         )
 
         conversation = self._resolve_conversation(conversation_id)
@@ -1513,6 +1545,8 @@ class ChatService:
 
         user_query = messages[-1].content
         intent = self._classify_intent(user_query)
+        if is_comparison:
+            intent = "comparison"
 
         context_docs: list[dict[str, Any]] = []
         retrieval_diagnostics: dict[str, Any] = {
@@ -1528,6 +1562,8 @@ class ChatService:
                 legislation_id=legislation_id,
                 domain=domain,
                 title=title,
+                legislation_ids=legislation_ids,
+                titles=titles,
             )
         except QdrantException as exc:
             retrieval_error = exc
@@ -1633,7 +1669,11 @@ class ChatService:
 
             return _degraded_stream(), conversation.id
 
-        formatted_context = self._format_context(context_docs)
+        formatted_context = (
+            self._format_context_grouped(context_docs)
+            if is_comparison
+            else self._format_context(context_docs)
+        )
         document_profile = self._infer_document_profile(context_docs, intent)
         prompt = self._construct_prompt(
             messages,
@@ -1644,6 +1684,15 @@ class ChatService:
         prompt = self._truncate_prompt(prompt)
 
         accumulated_response: list[str] = []
+        requested_doc_count = len(legislation_ids or titles or [])
+        distinct_doc_count = self._distinct_document_count(context_docs)
+        duplicate_note = ""
+        if is_comparison and distinct_doc_count < requested_doc_count:
+            duplicate_note = (
+                f"> **Note:** Only {distinct_doc_count} distinct document(s) were found for "
+                f"the {requested_doc_count} you selected — the others appear to be duplicates "
+                "or share the same indexed content, so there is nothing to compare.\n\n"
+            )
 
         sources = [
             {
@@ -1672,6 +1721,9 @@ class ChatService:
 
         def stream_and_save() -> Iterator[dict[str, str]]:
             yield {"event": "progress", "data": "retrieval_complete"}
+            if duplicate_note:
+                accumulated_response.append(duplicate_note)
+                yield {"event": "data", "data": duplicate_note}
             for chunk in self.llm_client.generate_text_stream(
                 prompt,
                 temperature=temperature,
@@ -1759,6 +1811,63 @@ class ChatService:
             )
         return "\n".join(formatted)
 
+    def _distinct_document_count(self, docs: list[dict]) -> int:
+        """Count distinct pinned documents in the retrieved context.
+
+        Distinctness is keyed by legislation_id/document_id, falling back to title,
+        matching the grouping used by _format_context_grouped.
+        """
+        keys = {
+            str(
+                doc.get("legislation_id")
+                or doc.get("document_id")
+                or doc.get("title")
+                or "Unknown",
+            )
+            for doc in docs
+        }
+        return len(keys)
+
+    def _format_context_grouped(self, docs: list[dict]) -> str:
+        """Format retrieved chunks grouped per document for comparison prompts.
+
+        Groups by title (falling back to legislation_id/document_id) so the LLM can
+        clearly tell which chunks belong to which document before comparing them.
+        Each document gets a fair share of the context budget so a large first
+        document cannot crowd the others out of the prompt.
+        """
+        groups: dict[str, list[dict]] = {}
+        labels: dict[str, str] = {}
+        order: list[str] = []
+        for doc in docs:
+            key = str(
+                doc.get("legislation_id")
+                or doc.get("document_id")
+                or doc.get("title")
+                or "Unknown",
+            )
+            if key not in groups:
+                groups[key] = []
+                labels[key] = str(doc.get("title") or key)
+                order.append(key)
+            groups[key].append(doc)
+
+        if not order:
+            return ""
+
+        # Reserve most of the prompt budget for context, split evenly per document.
+        context_budget = max(4000, self.settings.max_prompt_characters - 6000)
+        per_doc_budget = context_budget // len(order)
+
+        blocks = []
+        for di, key in enumerate(order, 1):
+            chunks = groups[key]
+            chunk_text = "\n".join(c.get("text", "") for c in chunks)
+            if len(chunk_text) > per_doc_budget:
+                chunk_text = chunk_text[:per_doc_budget] + "\n[...truncated...]"
+            blocks.append(f"=== DOCUMENT {di}: {labels[key]} ===\n{chunk_text}\n")
+        return "\n".join(blocks)
+
     def _construct_prompt(
         self,
         messages: list[Message],
@@ -1790,6 +1899,7 @@ class ChatService:
             "legal_lookup": "Prioritize precise legal grounding and source-backed obligations.",
             "follow_up_clarification": "Resolve ambiguity from prior turns and explicitly state assumptions.",
             "procedural_guidance": "Provide step-by-step compliance actions and clearly name responsible actors.",
+            "comparison": "Compare the documents directly. Identify what each one says about the same topics and lay out the differences and similarities side by side, citing each document by title.",
             "document_lookup": "Provide a clear, informative answer based on the company documentation sources.",
             "out_of_domain": "Answer with the best available guidance from indexed sources first, including user-uploaded documents, and then ask one focused follow-up only if it improves precision.",
         }
@@ -1856,13 +1966,24 @@ For each question, structure your response as follows:
 3. **Internal Consistency**: Never contradict yourself within a response
 4. **Completeness**: Explain concepts clearly without assuming prior knowledge"""
 
+        if intent == "comparison":
+            response_structure = """
+# RESPONSE STRUCTURE (MANDATORY — COMPARISON)
+
+The documentation sources below are grouped per document. You MUST compare them
+directly. Do not refuse to compare; if one document is silent on a point, say so.
+
+1. **One-Sentence Summary**: State the single biggest difference between the documents.
+2. **Comparison Table**: Build a markdown table with one column per document (use the document titles as headers) and one row per topic that differs.
+3. **Key Differences**: Bullet the substantive differences, citing each document by title.
+4. **Key Similarities**: Bullet what the documents agree on.
+5. **Practical Takeaway**: Explain which document applies when, or what the differences mean in practice."""
+
         return f"""
 You are the 1CC & Techprotect knowledge assistant. You help employees and consultants work with multiple document classes: legal and legislation sources, internal company documentation, and employee-provided documents in any format.
 
 # SOURCE SCOPE POLICY (CRITICAL)
 
-    - Treat the currently indexed and uploaded documents as the active working corpus for this conversation.
-    - User-uploaded documents are first-class sources and must be handled as valid reference material, regardless of format or origin.
     - External references or research papers are valid sources when present in the working corpus.
     - Never critique the corpus composition and never classify documents as "wrong" for the conversation.
     - Never start with rejection-style wording. Start with a useful answer, then optionally ask one targeted follow-up to improve precision.
@@ -1874,6 +1995,9 @@ You are the 1CC & Techprotect knowledge assistant. You help employees and consul
     - Do not block the user before attempting an answer from the available sources.
     - If context is weak, provide the best answer possible first, then ask one precise follow-up (for example a section, title, or excerpt) to improve accuracy.
     - If the retrieved material genuinely does not contain information needed to answer the question, say so honestly — do not fabricate an answer or force a connection that is not supported by the source text.
+    - Answer the question directly. Do NOT open with preambles, readiness statements, or scope summaries (e.g. "I'm ready to assist with...", "Based on the documentation in the working corpus...").
+    - Never mention indexing, the corpus, retrieval, document availability, or your own capabilities. The user cares only about the answer, not how it was produced.
+    - Do not ask the user to share document titles, sections, or excerpts. Start the response with the substantive answer.
 
 # DOCUMENT PROFILE ADAPTATION (MANDATORY)
 
